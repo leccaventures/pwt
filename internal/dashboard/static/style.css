@@ -1,0 +1,221 @@
+:root {
+	/* Light Theme (Subtle Grayish) */
+	--bg-color: #f0f2f5;
+	--text-color: #2d3436;
+	--card-bg: #ffffff;
+	--table-header: #636e72;
+	--border-color: transparent;
+	--success: #55efc4; /* Soft Mint */
+	--success-dim: #b2bec3; /* For normal blocks */
+	--error: #ff7675;   /* Soft Red */
+	--warning: #ffeaa7;
+	--link-color: #0984e3;
+	--row-hover: rgba(0,0,0,0.02);
+}
+
+[data-theme="dark"] {
+	/* Tenderduty Style Dark Theme */
+	--bg-color: #1e1e1e; /* Dark Gray Background */
+	--text-color: #dfe6e9;
+	--card-bg: #1e1e1e; /* Same as bg for seamless look */
+	--table-header: #636e72; /* Dimmed header text */
+	--border-color: #2d3436;
+	--success: #00b894; /* Vivid Green for status */
+	--success-dim: #2d3436; /* Dark Grey for signed blocks (background-like) */
+	--error: #ff7675;   /* Soft Red */
+	--warning: #fdcb6e; /* Orange */
+	--link-color: #74b9ff;
+	--row-hover: rgba(255,255,255,0.03);
+}
+
+body {
+	background-color: var(--bg-color);
+	color: var(--text-color);
+	font-family: 'SF Mono', 'Roboto Mono', Menlo, monospace; /* Monospace for terminal feel */
+	margin: 0;
+	padding: 20px;
+	font-size: 14px;
+	transition: background-color 0.3s, color 0.3s;
+}
+
+h1, h2 { 
+	color: var(--text-color);
+	font-weight: 700;
+	letter-spacing: -0.5px;
+}
+
+h1 { font-size: 1.5rem; margin-bottom: 5px; }
+h2 { 
+	font-size: 0.9rem; 
+	text-transform: uppercase; 
+	color: var(--table-header); 
+	margin-bottom: 15px; 
+	border-bottom: 1px solid var(--border-color);
+	padding-bottom: 10px;
+}
+
+.header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 40px;
+	padding-bottom: 20px;
+	border-bottom: 1px solid var(--border-color);
+}
+
+button.theme-toggle {
+	background: transparent;
+	border: 1px solid var(--table-header);
+	color: var(--text-color);
+	padding: 6px 12px;
+	cursor: pointer;
+	border-radius: 4px;
+	font-family: inherit;
+	font-size: 0.8rem;
+}
+
+/* Minimal Table Styles */
+table {
+	border-collapse: collapse;
+	width: 100%;
+	background: transparent; /* No card background */
+	box-shadow: none;
+}
+
+th, td {
+	border: none; /* No grid lines */
+	border-bottom: 1px solid var(--border-color);
+	padding: 12px 8px;
+	text-align: left;
+}
+
+th {
+	background-color: transparent;
+	color: var(--table-header);
+	font-size: 0.75rem;
+	text-transform: uppercase;
+	letter-spacing: 1px;
+	font-weight: 600;
+}
+
+td {
+	font-size: 0.9rem;
+}
+
+tr:hover { background-color: var(--row-hover); }
+
+.down { color: var(--error) !important; } /* Text color change instead of bg */
+
+/* Card Reset */
+.card {
+	background: transparent;
+	border: none;
+	box-shadow: none;
+	padding: 0;
+	margin-bottom: 40px;
+}
+
+.dashboard-grid {
+	display: grid;
+	grid-template-columns: 1fr;
+	gap: 40px;
+}
+
+@media (min-width: 1200px) {
+	.dashboard-grid {
+		grid-template-columns: 1fr; /* Stack vertically like Tenderduty usually does, or 1fr 1fr */
+	}
+}
+
+/* Canvas & Vis */
+.vis-canvas {
+	width: 100%;
+	height: 24px;
+	display: block;
+	background: rgba(255,255,255,0.05); /* Slight track background */
+	border-radius: 2px;
+}
+
+/* Logs */
+#logs-container {
+	display: none;
+	max-height: 400px;
+	overflow-y: auto;
+	font-family: 'SF Mono', 'Roboto Mono', monospace;
+	font-size: 0.85rem;
+	background: #121212; /* Terminal black */
+	border: 1px solid var(--border-color);
+	padding: 15px;
+	border-radius: 4px;
+	color: #dcdcdc;
+}
+.log-entry {
+	margin-bottom: 4px;
+	border-bottom: none;
+	white-space: pre-wrap; /* Wrap long lines */
+}
+.log-time {
+	color: #636e72;
+	margin-right: 8px;
+}
+.log-level {
+	font-weight: bold;
+	margin-right: 8px;
+}
+.log-comp {
+	color: #0984e3; /* Cyan/Blue */
+	margin-right: 8px;
+}
+/* Level Colors */
+.log-info .log-level { color: #55efc4; } /* Green */
+.log-warn .log-level { color: #fdcb6e; } /* Orange/Yellow */
+.log-error .log-level { color: #ff7675; } /* Red */
+.log-debug .log-level { color: #636e72; } /* Gray */
+
+[data-theme="light"] #logs-container {
+	background: #f8f9fa;
+	color: #2d3436;
+	border: 1px solid #dfe6e9;
+}
+[data-theme="light"] .log-comp { color: #00cec9; }
+[data-theme="light"] .log-info .log-level { color: #00b894; }
+[data-theme="light"] .log-warn .log-level { color: #e17055; } /* Darker Orange for light mode */
+[data-theme="light"] .log-error .log-level { color: #d63031; }
+
+/* Card Header with Block Time */
+.card-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 15px;
+	border-bottom: 1px solid var(--border-color);
+	padding-bottom: 10px;
+}
+
+.card-header h2 {
+	margin: 0;
+	padding: 0;
+	border: none;
+}
+
+/* Block Time Badge - Big Number Style */
+.block-time-badge {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 2px;
+}
+
+.block-time-value {
+	font-size: 1.5rem;
+	font-weight: 700;
+	color: var(--success);
+	letter-spacing: -1px;
+}
+
+.block-time-label {
+	font-size: 0.65rem;
+	text-transform: uppercase;
+	color: var(--table-header);
+	letter-spacing: 1px;
+}

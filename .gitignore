@@ -1,0 +1,17 @@
+# User-specific files
+guide.md
+config.yml
+
+# Build artifacts
+/monitor
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Runtime data
+data/
+
+# Sisyphus working directory
+.sisyphus/
+.DS_Store

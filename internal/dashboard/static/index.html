@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Pharos Watchtower</title>
+	<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div class="header">
+	<div>
+		<h1>Pharos Watchtower</h1>
+		<div id="status">Connecting...</div>
+	</div>
+	<button class="theme-toggle" onclick="toggleTheme()">Theme</button>
+</div>
+
+<div class="dashboard-grid">
+	<div class="card full-width">
+		<div class="card-header">
+			<h2>Real-time Signing Activity</h2>
+			<div class="block-time-badge">
+				<span class="block-time-value" id="avg-block-time-1">--</span>
+				<span class="block-time-label">Block Time</span>
+			</div>
+		</div>
+		<table id="activity-table">
+			<thead>
+				<tr>
+					<th style="width: 150px;">Moniker</th>
+					<th style="width: 80px;">Uptime</th>
+					<th>Recent Blocks (New &rarr; Old)</th>
+				</tr>
+			</thead>
+			<tbody></tbody>
+		</table>
+		
+		<div style="margin-top: 10px; font-size: 0.8rem; color: var(--table-header); display: flex; gap: 20px;">
+			<div style="display: flex; align-items: center; gap: 6px;">
+				<div style="width: 10px; height: 10px; background-color: var(--success-dim);"></div>
+				<span>Signed</span>
+			</div>
+			<div style="display: flex; align-items: center; gap: 6px;">
+				<div style="width: 10px; height: 10px; background-color: var(--error);"></div>
+				<span>Missed</span>
+			</div>
+		</div>
+	</div>
+
+	<div class="card full-width">
+		<div class="card-header">
+			<h2>Validator Performance</h2>
+			<div class="block-time-badge">
+				<span class="block-time-value" id="avg-block-time-2">--</span>
+				<span class="block-time-label">Block Time</span>
+			</div>
+		</div>
+		<table id="stats-table">
+			<thead>
+				<tr>
+					<th>Moniker</th>
+					<th>Status</th>
+					<th>Uptime</th>
+					<th>Missed</th>
+					<th>Staking</th>
+					<th>Last Height</th>
+					<th>Down</th>
+				</tr>
+			</thead>
+			<tbody></tbody>
+		</table>
+	</div>
+
+	<div class="card full-width">
+		<div class="card-header">
+			<h2>Node Status</h2>
+			<div class="block-time-badge">
+				<span class="block-time-value" id="avg-block-time-3">--</span>
+				<span class="block-time-label">Block Time</span>
+			</div>
+		</div>
+		<table id="nodes-table">
+			<thead>
+				<tr>
+					<th>Label</th>
+					<th>Healthy</th>
+					<th>Block Height</th>
+					<th>Syncing</th>
+					<th>Last Check</th>
+				</tr>
+			</thead>
+			<tbody></tbody>
+		</table>
+	</div>
+
+	<div id="logs-container" class="card full-width" style="display:none;">
+		<h2>System Logs</h2>
+		<div id="logs-content"></div>
+	</div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

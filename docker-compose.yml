@@ -1,0 +1,14 @@
+version: "3.9"
+
+services:
+  watchtower:
+    build: .
+    container_name: pharos-watchtower
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "8089:8089"
+    volumes:
+      - ./config.yml:/root/.pwt/config.yml:ro
+      - ./data:/root/.pwt/data
+    command: ["--config", "/root/.pwt/config.yml", "--data-dir", "/root/.pwt/data"]
