@@ -57,13 +57,6 @@ func NewProcessor(cfg config.ChainConfig, advanced config.AdvancedConfig, nodeMg
 }
 
 func (p *Processor) Start(ctx context.Context) {
-	maxConcurrent := p.advanced.Workers
-	if maxConcurrent <= 0 {
-		maxConcurrent = 50 // Default: allow up to 50 concurrent proof fetches
-	}
-
-	// Semaphore to limit concurrent goroutines
-	sem := make(chan struct{}, maxConcurrent)
 	var wg sync.WaitGroup
 
 	for {
@@ -80,13 +73,6 @@ func (p *Processor) Start(ctx context.Context) {
 			// Start async processing for each block immediately (no queue)
 			go func(header *types.Header) {
 				defer wg.Done()
-
-				// Acquire semaphore to limit concurrent RPC calls
-				sem <- struct{}{}
-				defer func() {
-					<-sem // Release semaphore
-				}()
-
 				p.processBlock(ctx, header)
 			}(header)
 		}

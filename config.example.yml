@@ -122,9 +122,6 @@ advanced:
     # WebSocket read timeout (default: 30s)
     ws_timeout: '30s'
 
-    # Maximum number of concurrent workers for processing blocks/proofs (default: 50)
-    #workers: 50
-
     # Port to listen on for the web dashboard (default: 8888, 0 = disabled)
     dashboard_port: 8888
 

@@ -102,7 +102,6 @@ type AdvancedConfig struct {
 	ReloadInterval string           `yaml:"reload_interval"`
 	RPCTimeout     string           `yaml:"rpc_timeout"`
 	WSTimeout      string           `yaml:"ws_timeout"`
-	Workers        int              `yaml:"workers"`
 	DashboardPort  int              `yaml:"dashboard_port"`
 	Prometheus     PrometheusConfig `yaml:"prometheus"`
 	HideLogs       bool             `yaml:"hide_logs"`
@@ -196,9 +195,6 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Advanced.WSTimeout == "" {
 		cfg.Advanced.WSTimeout = "30s"
-	}
-	if cfg.Advanced.Workers == 0 {
-		cfg.Advanced.Workers = 50
 	}
 	if cfg.Advanced.DashboardPort == 0 {
 		cfg.Advanced.DashboardPort = 8888
