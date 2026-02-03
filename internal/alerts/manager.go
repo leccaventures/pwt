@@ -114,6 +114,13 @@ func (m *Manager) checkRules(ctx context.Context) {
 	}
 }
 
+// SaveState persists alert state to disk (e.g. on shutdown).
+func (m *Manager) SaveState() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.state.Save(m.chainID, m.alerts)
+}
+
 func (m *Manager) checkValidatorDown(ctx context.Context, now time.Time) {
 	vals := m.registry.GetValidators()
 	fireDuration := m.cfg.Rules.ValidatorDown.FireDuration()

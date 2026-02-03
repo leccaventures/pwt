@@ -5,14 +5,15 @@ services:
     build: .
     container_name: pharos-watchtower
     restart: unless-stopped
+    stop_grace_period: 15s 
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
     ports:
-      - "8080:8080"
-      - "8089:8089"
+      - "8888:8888"
+      - "9999:9999"
     volumes:
       - ./config.yml:/root/.pwt/config.yml:ro
       - ./data:/root/.pwt/data

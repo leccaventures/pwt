@@ -2,8 +2,10 @@ package metrics
 
 import (
 	"context"
+	"math"
 	"math/big"
-	"strconv"
+	"sync"
+	"sync/atomic"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"lecca.io/pharos-watchtower/internal/config"
@@ -34,22 +36,28 @@ type Exporter struct {
 	nodeUp        *prometheus.GaugeVec
 	nodeSyncing   *prometheus.GaugeVec
 	nodeLastCheck *prometheus.GaugeVec
-	blockPart     *prometheus.GaugeVec
 
-	validatorBlockHeights map[string]map[uint64]struct{}
-	validatorMonikers     map[string]string
+	validatorMonikers map[string]string
+
+	updateCh        chan struct{}
+	closing         chan struct{}
+	started         uint32
+	pendingUpdate   uint32
+	lastIntervalSet uint32
+	lastInterval    uint64
+	avg100Set       uint32
+	avg100          uint64
+	workerWaitGroup sync.WaitGroup
 }
 
-const blockParticipationMax = 100
-
-func NewExporter(cfg config.ChainConfig, reg *validators.Registry, nodeMgr *rpc.Manager) *Exporter {
-	prefix := cfg.MetricsPrefix
+func NewExporter(cfg config.Config, reg *validators.Registry, nodeMgr *rpc.Manager) *Exporter {
+	prefix := cfg.Advanced.Prometheus.MetricsPrefix
 	if prefix == "" {
 		prefix = "pharos"
 	}
 
 	e := &Exporter{
-		cfg:           cfg,
+		cfg:           cfg.Chain,
 		metricsPrefix: prefix,
 		registry:      reg,
 		nodeMgr:       nodeMgr,
@@ -126,12 +134,9 @@ func NewExporter(cfg config.ChainConfig, reg *validators.Registry, nodeMgr *rpc.
 			Name: prefix + "_node_last_check_timestamp",
 			Help: "Unix timestamp of last node check",
 		}, []string{"chain_id", "label", "rpc_url"}),
-		blockPart: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: prefix + "_validator_block_participation",
-			Help: "Validator participation per block height (1=participated, 0=missed)",
-		}, []string{"chain_id", "validator", "moniker", "height"}),
-		validatorBlockHeights: make(map[string]map[uint64]struct{}),
-		validatorMonikers:     make(map[string]string),
+		validatorMonikers: make(map[string]string),
+		updateCh:          make(chan struct{}, 1),
+		closing:           make(chan struct{}),
 	}
 
 	prometheus.MustRegister(e.uptime)
@@ -152,15 +157,54 @@ func NewExporter(cfg config.ChainConfig, reg *validators.Registry, nodeMgr *rpc.
 	prometheus.MustRegister(e.nodeLastCheck)
 	prometheus.MustRegister(e.blockTime)
 	prometheus.MustRegister(e.avgBlock100)
-	prometheus.MustRegister(e.blockPart)
 
 	return e
 }
 
-func (e *Exporter) Start(ctx context.Context) {}
+func (e *Exporter) Start(ctx context.Context) {
+	if !atomic.CompareAndSwapUint32(&e.started, 0, 1) {
+		return
+	}
+
+	e.workerWaitGroup.Add(1)
+	go func() {
+		defer e.workerWaitGroup.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				close(e.closing)
+				return
+			case <-e.updateCh:
+				atomic.StoreUint32(&e.pendingUpdate, 0)
+				e.update()
+			}
+		}
+	}()
+}
 
 func (e *Exporter) Update() {
-	e.update()
+	if atomic.LoadUint32(&e.started) == 0 {
+		return
+	}
+	if atomic.CompareAndSwapUint32(&e.pendingUpdate, 0, 1) {
+		select {
+		case e.updateCh <- struct{}{}:
+		case <-e.closing:
+			return
+		default:
+			atomic.StoreUint32(&e.pendingUpdate, 0)
+		}
+	}
+}
+
+func (e *Exporter) SetLastBlockIntervalSeconds(seconds float64) {
+	atomic.StoreUint64(&e.lastInterval, math.Float64bits(seconds))
+	atomic.StoreUint32(&e.lastIntervalSet, 1)
+}
+
+func (e *Exporter) SetAvgBlockTime100Seconds(seconds float64) {
+	atomic.StoreUint64(&e.avg100, math.Float64bits(seconds))
+	atomic.StoreUint32(&e.avg100Set, 1)
 }
 
 func (e *Exporter) update() {
@@ -170,14 +214,24 @@ func (e *Exporter) update() {
 	// Update block time metrics using the first validator's window as a network proxy
 	blockTimeSec := 0.0
 	avgBlock100Sec := 0.0
+	if atomic.LoadUint32(&e.lastIntervalSet) == 1 {
+		blockTimeSec = math.Float64frombits(atomic.LoadUint64(&e.lastInterval))
+	}
+	if atomic.LoadUint32(&e.avg100Set) == 1 {
+		avgBlock100Sec = math.Float64frombits(atomic.LoadUint64(&e.avg100))
+	}
 	for _, v := range vals {
-		lastInterval := v.Window.GetLastBlockInterval()
-		if lastInterval > 0 {
-			blockTimeSec = lastInterval.Seconds()
+		if blockTimeSec == 0 {
+			lastInterval := v.Window.GetLastBlockInterval()
+			if lastInterval > 0 {
+				blockTimeSec = lastInterval.Seconds()
+			}
 		}
-		avgInterval := v.Window.GetAvgBlockTimeLastN(100)
-		if avgInterval > 0 {
-			avgBlock100Sec = avgInterval.Seconds()
+		if avgBlock100Sec == 0 {
+			avgInterval := v.Window.GetAvgBlockTimeLastN(100)
+			if avgInterval > 0 {
+				avgBlock100Sec = avgInterval.Seconds()
+			}
 		}
 		break
 	}
@@ -188,40 +242,7 @@ func (e *Exporter) update() {
 	for _, v := range vals {
 		valID := v.Meta.ValidatorID
 		moniker := v.Meta.Description
-		if lastMoniker, ok := e.validatorMonikers[valID]; ok && lastMoniker != moniker {
-			e.blockPart.DeletePartialMatch(prometheus.Labels{"chain_id": chainID, "validator": valID})
-			delete(e.validatorBlockHeights, valID)
-		}
-
 		e.validatorMonikers[valID] = moniker
-		currentHeights := make(map[uint64]struct{})
-		snapshot := v.Window.Export()
-		items := snapshot.Items
-		if len(items) > blockParticipationMax {
-			items = items[len(items)-blockParticipationMax:]
-		}
-		for _, item := range items {
-			currentHeights[item.Height] = struct{}{}
-			participated := 0.0
-			if item.Participated {
-				participated = 1.0
-			}
-			e.blockPart.With(prometheus.Labels{
-				"chain_id":  chainID,
-				"validator": valID,
-				"moniker":   moniker,
-				"height":    strconv.FormatUint(item.Height, 10),
-			}).Set(participated)
-		}
-
-		if previousHeights, ok := e.validatorBlockHeights[valID]; ok {
-			for height := range previousHeights {
-				if _, keep := currentHeights[height]; !keep {
-					e.blockPart.DeleteLabelValues(chainID, valID, moniker, strconv.FormatUint(height, 10))
-				}
-			}
-		}
-		e.validatorBlockHeights[valID] = currentHeights
 
 		missed, total, ratio := v.Window.GetStats()
 

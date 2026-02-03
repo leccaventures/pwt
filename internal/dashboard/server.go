@@ -77,15 +77,15 @@ func (s *Server) Start(ctx context.Context) {
 				w.Write(content)
 			})
 
-			if s.cfg.Advanced.MetricsPort > 0 && s.cfg.Advanced.MetricsPort == s.cfg.Advanced.DashboardPort {
+			if s.cfg.Advanced.Prometheus.Port > 0 && s.cfg.Advanced.Prometheus.Port == s.cfg.Advanced.DashboardPort {
 
 				mux.Handle("/metrics", promhttp.Handler())
 			}
 		})
 	}
 
-	if s.cfg.Advanced.MetricsPort > 0 && s.cfg.Advanced.MetricsPort != s.cfg.Advanced.DashboardPort {
-		go s.runServer(ctx, s.cfg.Advanced.MetricsPort, func(mux *http.ServeMux) {
+	if s.cfg.Advanced.Prometheus.Port > 0 && s.cfg.Advanced.Prometheus.Port != s.cfg.Advanced.DashboardPort {
+		go s.runServer(ctx, s.cfg.Advanced.Prometheus.Port, func(mux *http.ServeMux) {
 			mux.Handle("/metrics", promhttp.Handler())
 		})
 	}
@@ -236,8 +236,8 @@ func (s *Server) getStateJSON() ([]byte, error) {
 
 	type StateDTO struct {
 		AvgBlockTime float64        `json:"avg_block_time"`
-		Validators []ValidatorDTO `json:"validators"`
-		Nodes      []NodeDTO      `json:"nodes"`
+		Validators   []ValidatorDTO `json:"validators"`
+		Nodes        []NodeDTO      `json:"nodes"`
 	}
 
 	var validatorDTOs []ValidatorDTO
@@ -314,8 +314,8 @@ func (s *Server) getStateJSON() ([]byte, error) {
 
 	state := StateDTO{
 		AvgBlockTime: avgBlockTime,
-		Validators: validatorDTOs,
-		Nodes:      nodeDTOs,
+		Validators:   validatorDTOs,
+		Nodes:        nodeDTOs,
 	}
 
 	return json.Marshal(state)

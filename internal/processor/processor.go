@@ -3,6 +3,7 @@ package processor
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"strings"
 	"sync"
 	"time"
@@ -35,7 +36,12 @@ type Processor struct {
 	blockCh     <-chan *types.Header
 	broadcaster StateBroadcaster
 	exporter    *metrics.Exporter
+	cacheMu     sync.RWMutex
+	blockTime   map[uint64]uint64
+	cacheMin    uint64
 }
+
+const blockTimeCacheSize = 200
 
 func NewProcessor(cfg config.ChainConfig, advanced config.AdvancedConfig, nodeMgr *rpc.Manager, registry *validators.Registry, blockCh <-chan *types.Header, broadcaster StateBroadcaster, exporter *metrics.Exporter) *Processor {
 	return &Processor{
@@ -46,6 +52,7 @@ func NewProcessor(cfg config.ChainConfig, advanced config.AdvancedConfig, nodeMg
 		blockCh:     blockCh,
 		broadcaster: broadcaster,
 		exporter:    exporter,
+		blockTime:   make(map[uint64]uint64),
 	}
 }
 
@@ -101,7 +108,7 @@ func (p *Processor) processBlock(ctx context.Context, header *types.Header) {
 			}
 		}
 	}
-	blockTime := time.Unix(int64(header.Time), 0)
+	var blockTime time.Time
 
 	// Broadcast update immediately when we start processing a block
 	// This ensures node height (updated by WS listener) is reflected immediately
@@ -136,6 +143,73 @@ func (p *Processor) processBlock(ctx context.Context, header *types.Header) {
 			waited += waitInterval
 			nodeHeight = node.GetBlockHeight()
 		}
+	}
+
+	if node != nil && node.RPC != nil && height > 0 {
+		var currentTs uint64
+		p.cacheMu.RLock()
+		currentTs, okCurrent := p.blockTime[height]
+		p.cacheMu.RUnlock()
+		if !okCurrent {
+			var block *types.Block
+			var err error
+			// Retry: node may return "block is not available" briefly after newHeads (block not yet in BlockByNumber).
+			for attempt := 0; attempt < 4; attempt++ {
+				if attempt > 0 {
+					time.Sleep(200 * time.Millisecond)
+				}
+				ctxWithTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
+				block, err = node.RPC.BlockByNumber(ctxWithTimeout, new(big.Int).SetUint64(height))
+				cancel()
+				if err == nil && block != nil {
+					break
+				}
+				if err != nil && !strings.Contains(err.Error(), "block is not available") {
+					break
+				}
+			}
+			if err != nil {
+				logger.Warn("PROC", "Failed to fetch block for timestamp (height=%d): %v", height, err)
+			} else if block != nil {
+				currentTs = block.Time()
+				p.cacheMu.Lock()
+				p.blockTime[height] = currentTs
+				if p.cacheMin == 0 || height < p.cacheMin {
+					p.cacheMin = height
+				}
+				for len(p.blockTime) > blockTimeCacheSize {
+					delete(p.blockTime, p.cacheMin)
+					p.cacheMin++
+				}
+				p.cacheMu.Unlock()
+			}
+		}
+		if currentTs > 0 {
+			blockTime = time.Unix(int64(currentTs), 0)
+		}
+
+		if p.exporter != nil {
+			prevHeight := height - 1
+			if height > 1 {
+				prevTs := p.getCachedBlockTime(ctx, node, prevHeight)
+				if prevTs > 0 && currentTs > 0 {
+					intervalSec := float64(currentTs - prevTs)
+					p.exporter.SetLastBlockIntervalSeconds(intervalSec)
+				}
+			}
+
+			avgHeight := height - 100
+			if height > 100 {
+				avgTs := p.getCachedBlockTime(ctx, node, avgHeight)
+				if avgTs > 0 && currentTs > 0 {
+					avgSec := float64(currentTs-avgTs) / 100.0
+					p.exporter.SetAvgBlockTime100Seconds(avgSec)
+				}
+			}
+		}
+	}
+	if blockTime.IsZero() {
+		blockTime = time.Now()
 	}
 
 	var proof BlockProofResponse
@@ -258,4 +332,47 @@ func (p *Processor) processBlock(ctx context.Context, header *types.Header) {
 		p.exporter.Update()
 	}
 
+}
+
+func (p *Processor) getCachedBlockTime(ctx context.Context, node *rpc.Node, height uint64) uint64 {
+	if node == nil || node.RPC == nil || height == 0 {
+		return 0
+	}
+
+	p.cacheMu.RLock()
+	if ts, ok := p.blockTime[height]; ok {
+		p.cacheMu.RUnlock()
+		return ts
+	}
+	p.cacheMu.RUnlock()
+
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
+	block, err := node.RPC.BlockByNumber(ctxWithTimeout, new(big.Int).SetUint64(height))
+	cancel()
+	if err != nil {
+		// "block is not available" often means pruned block (e.g. height-100) or node lag; log at Debug to reduce noise.
+		if strings.Contains(err.Error(), "block is not available") {
+			logger.Debug("PROC", "Block not available for timestamp (height=%d): %v", height, err)
+		} else {
+			logger.Warn("PROC", "Failed to fetch block for timestamp (height=%d): %v", height, err)
+		}
+		return 0
+	}
+	if block == nil {
+		return 0
+	}
+
+	blockTime := block.Time()
+	p.cacheMu.Lock()
+	p.blockTime[height] = blockTime
+	if p.cacheMin == 0 || height < p.cacheMin {
+		p.cacheMin = height
+	}
+	for len(p.blockTime) > blockTimeCacheSize {
+		delete(p.blockTime, p.cacheMin)
+		p.cacheMin++
+	}
+	p.cacheMu.Unlock()
+
+	return blockTime
 }

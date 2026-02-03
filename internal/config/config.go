@@ -24,11 +24,10 @@ type Config struct {
 // ============================================================
 
 type ChainConfig struct {
-	ChainID       string       `yaml:"chain_id"`
-	Mode          string       `yaml:"mode"`
-	Validators    []string     `yaml:"validators"`
-	Nodes         []NodeConfig `yaml:"nodes"`
-	MetricsPrefix string       `yaml:"metrics_prefix"`
+	ChainID    string       `yaml:"chain_id"`
+	Mode       string       `yaml:"mode"`
+	Validators []string     `yaml:"validators"`
+	Nodes      []NodeConfig `yaml:"nodes"`
 }
 
 type NodeConfig struct {
@@ -99,16 +98,21 @@ type AlertUptimeRule struct {
 // ============================================================
 
 type AdvancedConfig struct {
-	Window         string `yaml:"window"`
-	ReloadInterval string `yaml:"reload_interval"`
-	RPCTimeout     string `yaml:"rpc_timeout"`
-	WSTimeout      string `yaml:"ws_timeout"`
-	Workers        int    `yaml:"workers"`
-	DashboardPort  int    `yaml:"dashboard_port"`
-	MetricsPort    int    `yaml:"metrics_port"`
-	HideLogs       bool   `yaml:"hide_logs"`
-	StateFile      string `yaml:"state_file"`
-	ContractAddr   string `yaml:"contract_addr"`
+	Window         string           `yaml:"window"`
+	ReloadInterval string           `yaml:"reload_interval"`
+	RPCTimeout     string           `yaml:"rpc_timeout"`
+	WSTimeout      string           `yaml:"ws_timeout"`
+	Workers        int              `yaml:"workers"`
+	DashboardPort  int              `yaml:"dashboard_port"`
+	Prometheus     PrometheusConfig `yaml:"prometheus"`
+	HideLogs       bool             `yaml:"hide_logs"`
+	StateFile      string           `yaml:"state_file"`
+	ContractAddr   string           `yaml:"contract_addr"`
+}
+
+type PrometheusConfig struct {
+	MetricsPrefix string `yaml:"metrics_prefix"`
+	Port          int    `yaml:"port"`
 }
 
 // ============================================================
@@ -196,8 +200,14 @@ func Load(path string) (*Config, error) {
 	if cfg.Advanced.Workers == 0 {
 		cfg.Advanced.Workers = 50
 	}
-	if cfg.Chain.MetricsPrefix == "" {
-		cfg.Chain.MetricsPrefix = "pharos"
+	if cfg.Advanced.DashboardPort == 0 {
+		cfg.Advanced.DashboardPort = 8888
+	}
+	if cfg.Advanced.Prometheus.Port == 0 {
+		cfg.Advanced.Prometheus.Port = 9999
+	}
+	if cfg.Advanced.Prometheus.MetricsPrefix == "" {
+		cfg.Advanced.Prometheus.MetricsPrefix = "pharos"
 	}
 	if cfg.Advanced.ContractAddr == "" {
 		cfg.Advanced.ContractAddr = "0x4100000000000000000000000000000000000000"

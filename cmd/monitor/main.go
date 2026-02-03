@@ -76,7 +76,7 @@ func main() {
 	listener := ws.NewListener(cfg.Chain, nodeMgr, blockCh, dash)
 	listener.Start(ctx)
 
-	exporter := metrics.NewExporter(cfg.Chain, registry, nodeMgr)
+	exporter := metrics.NewExporter(*cfg, registry, nodeMgr)
 	exporter.Start(ctx)
 
 	logger.Info("INIT", "Starting Block Processor...")
@@ -100,6 +100,12 @@ func main() {
 		logger.Warn("SYS", "Failed to save validator state: %v", err)
 	} else {
 		logger.Info("SYS", "Validator state saved successfully")
+	}
+	logger.Info("SYS", "Saving alert state...")
+	if err := alertMgr.SaveState(); err != nil {
+		logger.Warn("SYS", "Failed to save alert state: %v", err)
+	} else {
+		logger.Info("SYS", "Alert state saved successfully")
 	}
 
 	time.Sleep(1 * time.Second)

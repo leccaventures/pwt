@@ -123,11 +123,33 @@ func (s *StateStore) Save(chainID string, mode string, validatorsHash string, va
 	}
 
 	tempPath := fmt.Sprintf("%s.tmp", s.path)
-	if err := os.WriteFile(tempPath, data, 0o644); err != nil {
+	f, err := os.Create(tempPath)
+	if err != nil {
 		return err
 	}
-
-	return os.Rename(tempPath, s.path)
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tempPath)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tempPath)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tempPath)
+		return err
+	}
+	if err := os.Rename(tempPath, s.path); err != nil {
+		return err
+	}
+	// Sync parent dir so rename is persisted (important for Docker/volume)
+	if d, err := os.Open(filepath.Dir(s.path)); err == nil {
+		d.Sync()
+		d.Close()
+	}
+	return nil
 }
 
 func SnapshotToState(snapshot ValidatorSnapshot, windowDuration time.Duration) *ValidatorState {
