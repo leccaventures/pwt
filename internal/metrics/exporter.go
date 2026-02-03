@@ -207,6 +207,13 @@ func (e *Exporter) SetAvgBlockTime100Seconds(seconds float64) {
 	atomic.StoreUint32(&e.avg100Set, 1)
 }
 
+func (e *Exporter) GetAvgBlockTime100Seconds() float64 {
+	if atomic.LoadUint32(&e.avg100Set) == 1 {
+		return math.Float64frombits(atomic.LoadUint64(&e.avg100))
+	}
+	return 0
+}
+
 func (e *Exporter) update() {
 	vals := e.registry.GetValidators()
 	chainID := e.cfg.ChainID

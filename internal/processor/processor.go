@@ -145,7 +145,7 @@ func (p *Processor) processBlock(ctx context.Context, header *types.Header) {
 		}
 	}
 
-	if node != nil && node.RPC != nil && height > 0 {
+	if node != nil && node.RPC != nil && height > 0 && height <= nodeHeight {
 		var currentTs uint64
 		p.cacheMu.RLock()
 		currentTs, okCurrent := p.blockTime[height]

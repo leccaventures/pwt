@@ -14,6 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"lecca.io/pharos-watchtower/internal/config"
 	"lecca.io/pharos-watchtower/internal/logger"
+	"lecca.io/pharos-watchtower/internal/metrics"
 	"lecca.io/pharos-watchtower/internal/rpc"
 	"lecca.io/pharos-watchtower/internal/utils"
 	"lecca.io/pharos-watchtower/internal/validators"
@@ -26,6 +27,7 @@ type Server struct {
 	cfg      config.Config
 	registry *validators.Registry
 	nodeMgr  *rpc.Manager
+	exporter *metrics.Exporter
 
 	// WebSocket
 	upgrader  websocket.Upgrader
@@ -35,11 +37,12 @@ type Server struct {
 	mu        sync.Mutex
 }
 
-func NewServer(cfg config.Config, reg *validators.Registry, nodeMgr *rpc.Manager) *Server {
+func NewServer(cfg config.Config, reg *validators.Registry, nodeMgr *rpc.Manager, exporter *metrics.Exporter) *Server {
 	s := &Server{
 		cfg:      cfg,
 		registry: reg,
 		nodeMgr:  nodeMgr,
+		exporter: exporter,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
@@ -305,7 +308,9 @@ func (s *Server) getStateJSON() ([]byte, error) {
 
 	// Calculate average block time from first validator (network property)
 	var avgBlockTime float64
-	if len(vals) > 0 {
+	if s.exporter != nil {
+		avgBlockTime = s.exporter.GetAvgBlockTime100Seconds() * 1000
+	} else if len(vals) > 0 {
 		for _, v := range vals {
 			avgBlockTime = v.Window.GetAvgBlockTime()
 			break // Just need one validator for network block time

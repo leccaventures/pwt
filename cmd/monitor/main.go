@@ -40,24 +40,25 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	logger.Info("INIT", "Initializing RPC Node Manager...")
 	nodeMgr := rpc.NewManager(cfg.Chain.Nodes)
+	registry := validators.NewRegistry(cfg.Chain, cfg.Advanced, nodeMgr)
+	blockCh := make(chan *types.Header, 100)
+
+	exporter := metrics.NewExporter(*cfg, registry, nodeMgr)
+	exporter.Start(ctx)
+
+	dash := dashboard.NewServer(*cfg, registry, nodeMgr, exporter)
+	dash.Start(ctx)
+
+	logger.Info("INIT", "Initializing RPC Node Manager...")
 	nodeMgr.Start(ctx)
 
 	logger.Info("INIT", "Initializing Validator Registry...")
-	registry := validators.NewRegistry(cfg.Chain, cfg.Advanced, nodeMgr)
 	registry.Start(ctx)
-
-	blockCh := make(chan *types.Header, 100)
-	dash := dashboard.NewServer(*cfg, registry, nodeMgr)
-	dash.Start(ctx)
 
 	logger.Info("INIT", "Connecting to WebSocket for real-time blocks...")
 	listener := ws.NewListener(cfg.Chain, nodeMgr, blockCh, dash)
 	listener.Start(ctx)
-
-	exporter := metrics.NewExporter(*cfg, registry, nodeMgr)
-	exporter.Start(ctx)
 
 	logger.Info("INIT", "Starting Block Processor...")
 	proc := processor.NewProcessor(cfg.Chain, cfg.Advanced, nodeMgr, registry, blockCh, dash, exporter)
