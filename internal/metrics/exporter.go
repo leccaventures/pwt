@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"math/big"
+	"strconv"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"lecca.io/pharos-watchtower/internal/config"
@@ -33,7 +34,13 @@ type Exporter struct {
 	nodeUp        *prometheus.GaugeVec
 	nodeSyncing   *prometheus.GaugeVec
 	nodeLastCheck *prometheus.GaugeVec
+	blockPart     *prometheus.GaugeVec
+
+	validatorBlockHeights map[string]map[uint64]struct{}
+	validatorMonikers     map[string]string
 }
+
+const blockParticipationMax = 100
 
 func NewExporter(cfg config.ChainConfig, reg *validators.Registry, nodeMgr *rpc.Manager) *Exporter {
 	prefix := cfg.MetricsPrefix
@@ -119,6 +126,12 @@ func NewExporter(cfg config.ChainConfig, reg *validators.Registry, nodeMgr *rpc.
 			Name: prefix + "_node_last_check_timestamp",
 			Help: "Unix timestamp of last node check",
 		}, []string{"chain_id", "label", "rpc_url"}),
+		blockPart: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: prefix + "_validator_block_participation",
+			Help: "Validator participation per block height (1=participated, 0=missed)",
+		}, []string{"chain_id", "validator", "moniker", "height"}),
+		validatorBlockHeights: make(map[string]map[uint64]struct{}),
+		validatorMonikers:     make(map[string]string),
 	}
 
 	prometheus.MustRegister(e.uptime)
@@ -139,6 +152,7 @@ func NewExporter(cfg config.ChainConfig, reg *validators.Registry, nodeMgr *rpc.
 	prometheus.MustRegister(e.nodeLastCheck)
 	prometheus.MustRegister(e.blockTime)
 	prometheus.MustRegister(e.avgBlock100)
+	prometheus.MustRegister(e.blockPart)
 
 	return e
 }
@@ -172,6 +186,43 @@ func (e *Exporter) update() {
 	e.avgBlock100.With(prometheus.Labels{"chain_id": chainID}).Set(avgBlock100Sec)
 
 	for _, v := range vals {
+		valID := v.Meta.ValidatorID
+		moniker := v.Meta.Description
+		if lastMoniker, ok := e.validatorMonikers[valID]; ok && lastMoniker != moniker {
+			e.blockPart.DeletePartialMatch(prometheus.Labels{"chain_id": chainID, "validator": valID})
+			delete(e.validatorBlockHeights, valID)
+		}
+
+		e.validatorMonikers[valID] = moniker
+		currentHeights := make(map[uint64]struct{})
+		snapshot := v.Window.Export()
+		items := snapshot.Items
+		if len(items) > blockParticipationMax {
+			items = items[len(items)-blockParticipationMax:]
+		}
+		for _, item := range items {
+			currentHeights[item.Height] = struct{}{}
+			participated := 0.0
+			if item.Participated {
+				participated = 1.0
+			}
+			e.blockPart.With(prometheus.Labels{
+				"chain_id":  chainID,
+				"validator": valID,
+				"moniker":   moniker,
+				"height":    strconv.FormatUint(item.Height, 10),
+			}).Set(participated)
+		}
+
+		if previousHeights, ok := e.validatorBlockHeights[valID]; ok {
+			for height := range previousHeights {
+				if _, keep := currentHeights[height]; !keep {
+					e.blockPart.DeleteLabelValues(chainID, valID, moniker, strconv.FormatUint(height, 10))
+				}
+			}
+		}
+		e.validatorBlockHeights[valID] = currentHeights
+
 		missed, total, ratio := v.Window.GetStats()
 
 		uptime := 0.0
@@ -181,8 +232,8 @@ func (e *Exporter) update() {
 
 		labels := prometheus.Labels{
 			"chain_id":  chainID,
-			"validator": v.Meta.ValidatorID,
-			"moniker":   v.Meta.Description,
+			"validator": valID,
+			"moniker":   moniker,
 		}
 
 		e.uptime.With(labels).Set(uptime)

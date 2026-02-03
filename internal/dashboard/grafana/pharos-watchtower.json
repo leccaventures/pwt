@@ -1,0 +1,968 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.4.0",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "pharos_block_time_seconds{chain_id=~\"$chain_id\"}",
+          "legendFormat": "block_time",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Last Block Time",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 2
+              },
+              {
+                "color": "red",
+                "value": 4
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.4.0",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "pharos_block_time_avg_100_seconds{chain_id=~\"$chain_id\"}",
+          "legendFormat": "avg_100",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Avg Block Time (100)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.95
+              },
+              {
+                "color": "red",
+                "value": 0.90
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "mean"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.4.0",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "avg(pharos_validator_uptime_ratio{chain_id=~\"$chain_id\"})",
+          "legendFormat": "avg_uptime",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Avg Validator Uptime",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.4.0",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum(pharos_validator_down{chain_id=~\"$chain_id\"})",
+          "legendFormat": "down_count",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Validators Down",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "mode": "gradient"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.98
+              },
+              {
+                "color": "red",
+                "value": 0.95
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Last Signed Height"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Last Missed Height"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Last Seen"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 3
+      },
+      "id": 5,
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Uptime",
+            "desc": true
+          }
+        ]
+      },
+      "pluginVersion": "10.4.0",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "pharos_validator_uptime_ratio{chain_id=~\"$chain_id\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{validator}}",
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "pharos_validator_missed_blocks_total{chain_id=~\"$chain_id\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{validator}}",
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "pharos_validator_total_blocks_window{chain_id=~\"$chain_id\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{validator}}",
+          "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "pharos_validator_last_signed{chain_id=~\"$chain_id\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{validator}}",
+          "refId": "D"
+        },
+        {
+          "editorMode": "code",
+          "expr": "pharos_validator_last_missed{chain_id=~\"$chain_id\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{validator}}",
+          "refId": "E"
+        },
+        {
+          "editorMode": "code",
+          "expr": "pharos_validator_last_signed_block{chain_id=~\"$chain_id\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{validator}}",
+          "refId": "F"
+        },
+        {
+          "editorMode": "code",
+          "expr": "pharos_validator_last_missed_block{chain_id=~\"$chain_id\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{validator}}",
+          "refId": "G"
+        },
+        {
+          "editorMode": "code",
+          "expr": "pharos_validator_last_seen_timestamp{chain_id=~\"$chain_id\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{validator}}",
+          "refId": "H"
+        },
+        {
+          "editorMode": "code",
+          "expr": "pharos_validator_staking{chain_id=~\"$chain_id\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{validator}}",
+          "refId": "I"
+        },
+        {
+          "editorMode": "code",
+          "expr": "pharos_validator_last_height{chain_id=~\"$chain_id\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{validator}}",
+          "refId": "J"
+        },
+        {
+          "editorMode": "code",
+          "expr": "pharos_validator_down{chain_id=~\"$chain_id\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{validator}}",
+          "refId": "K"
+        }
+      ],
+      "title": "Validators (Uptime / Miss / Last Signed / Staking)",
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "validator",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "job": true,
+              "instance": true,
+              "chain_id": true
+            },
+            "indexByName": {
+              "moniker": 1,
+              "validator": 0
+            },
+            "renameByName": {
+              "validator": "Validator",
+              "moniker": "Moniker",
+              "Value": "Uptime",
+              "Value #A": "Uptime",
+              "Value #B": "Missed",
+              "Value #C": "Total Window",
+              "Value #D": "Last Signed",
+              "Value #E": "Last Missed",
+              "Value #F": "Last Signed Height",
+              "Value #G": "Last Missed Height",
+              "Value #H": "Last Seen",
+              "Value #I": "Staking",
+              "Value #J": "Last Height",
+              "Value #K": "Down"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "mode": "gradient"
+            },
+            "inspect": false
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "Down"
+                },
+                "1": {
+                  "text": "Up"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Last Check"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "id": 6,
+      "options": {
+        "showHeader": true
+      },
+      "pluginVersion": "10.4.0",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "pharos_node_height{chain_id=~\"$chain_id\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{label}}",
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "pharos_node_up{chain_id=~\"$chain_id\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{label}}",
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "pharos_node_syncing{chain_id=~\"$chain_id\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{label}}",
+          "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "pharos_node_last_check_timestamp{chain_id=~\"$chain_id\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{label}}",
+          "refId": "D"
+        }
+      ],
+      "title": "Nodes (Height / Up / Syncing / Last Check)",
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "label",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "job": true,
+              "instance": true,
+              "chain_id": true,
+              "rpc_url": true
+            },
+            "renameByName": {
+              "label": "Node",
+              "Value": "Height",
+              "Value #A": "Height",
+              "Value #B": "Up",
+              "Value #C": "Syncing",
+              "Value #D": "Last Check"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "id": 7,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "pluginVersion": "10.4.0",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "pharos_validator_staking{chain_id=~\"$chain_id\"}",
+          "legendFormat": "{{moniker}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Validator Staking",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "pluginVersion": "10.4.0",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "pharos_node_height{chain_id=~\"$chain_id\"}",
+          "legendFormat": "{{label}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Node Heights",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 33
+      },
+      "id": 9,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "pluginVersion": "10.4.0",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "pharos_block_time_seconds{chain_id=~\"$chain_id\"}",
+          "legendFormat": "block_time",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "pharos_block_time_avg_100_seconds{chain_id=~\"$chain_id\"}",
+          "legendFormat": "avg_100",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Block Time Trend",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "Missed"
+                },
+                "1": {
+                  "text": "Signed"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "gray",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "id": 10,
+      "options": {
+        "alignValue": "left",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "mergeValues": true,
+        "rowHeight": 0.85,
+        "showValue": "auto",
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "pluginVersion": "10.4.0",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "pharos_validator_last_signed{chain_id=~\"$chain_id\",validator=~\"$validator\"}",
+          "legendFormat": "{{moniker}}",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "max by (chain_id, validator, moniker) (pharos_validator_last_signed_block{chain_id=~\"$chain_id\",validator=~\"$validator\"} or pharos_validator_last_missed_block{chain_id=~\"$chain_id\",validator=~\"$validator\"})",
+          "legendFormat": "{{moniker}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Validator Consensus Vote (Last 100 blocks)",
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "Time",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "__name__": true,
+              "job": true,
+              "instance": true,
+              "chain_id": true,
+              "validator": true
+            },
+            "renameByName": {
+              "Value": "Participation",
+              "Value #B": "Height"
+            }
+          }
+        }
+      ],
+      "type": "state-timeline"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": [
+    "pharos",
+    "watchtower",
+    "validator"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "definition": "label_values(pharos_validator_uptime_ratio, chain_id)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Chain",
+        "multi": false,
+        "name": "chain_id",
+        "options": [],
+        "query": {
+          "query": "label_values(pharos_validator_uptime_ratio, chain_id)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "definition": "label_values(pharos_validator_uptime_ratio, validator)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Validator",
+        "multi": true,
+        "name": "validator",
+        "options": [],
+        "query": {
+          "query": "label_values(pharos_validator_uptime_ratio, validator)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Pharos Watchtower",
+  "uid": "pharos-watchtower",
+  "version": 2,
+  "weekStart": ""
+}
