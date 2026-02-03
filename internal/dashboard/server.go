@@ -130,18 +130,20 @@ func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
 	s.clients[ws] = true
 	s.mu.Unlock()
 
-	// Send initial state
+	// Send initial state and config while holding mu so no concurrent write from
+	// handleMessages/handleLogs to this connection (gorilla/websocket is not safe for concurrent write).
+	s.mu.Lock()
 	if state, err := s.getStateJSON(); err == nil {
-		ws.WriteMessage(websocket.TextMessage, state)
+		_ = ws.WriteMessage(websocket.TextMessage, state)
 	}
-
 	configMsg := map[string]interface{}{
 		"type":      "config",
 		"hide_logs": s.cfg.Advanced.HideLogs,
 	}
 	if bytes, err := json.Marshal(configMsg); err == nil {
-		ws.WriteMessage(websocket.TextMessage, bytes)
+		_ = ws.WriteMessage(websocket.TextMessage, bytes)
 	}
+	s.mu.Unlock()
 }
 
 func (s *Server) handleMessages() {
