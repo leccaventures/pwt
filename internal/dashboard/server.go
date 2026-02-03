@@ -81,15 +81,24 @@ func (s *Server) Start(ctx context.Context) {
 			})
 
 			if s.cfg.Advanced.Prometheus.Port > 0 && s.cfg.Advanced.Prometheus.Port == s.cfg.Advanced.DashboardPort {
-
-				mux.Handle("/metrics", promhttp.Handler())
+				mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+					if s.exporter != nil {
+						s.exporter.UpdateNow()
+					}
+					promhttp.Handler().ServeHTTP(w, r)
+				})
 			}
 		})
 	}
 
 	if s.cfg.Advanced.Prometheus.Port > 0 && s.cfg.Advanced.Prometheus.Port != s.cfg.Advanced.DashboardPort {
 		go s.runServer(ctx, s.cfg.Advanced.Prometheus.Port, func(mux *http.ServeMux) {
-			mux.Handle("/metrics", promhttp.Handler())
+			mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+				if s.exporter != nil {
+					s.exporter.UpdateNow()
+				}
+				promhttp.Handler().ServeHTTP(w, r)
+			})
 		})
 	}
 }

@@ -39,6 +39,7 @@ type Exporter struct {
 
 	validatorMonikers map[string]string
 
+	updateMu        sync.Mutex
 	updateCh        chan struct{}
 	closing         chan struct{}
 	started         uint32
@@ -176,7 +177,7 @@ func (e *Exporter) Start(ctx context.Context) {
 				return
 			case <-e.updateCh:
 				atomic.StoreUint32(&e.pendingUpdate, 0)
-				e.update()
+				e.updateLocked()
 			}
 		}
 	}()
@@ -197,6 +198,18 @@ func (e *Exporter) Update() {
 	}
 }
 
+// UpdateNow updates metrics synchronously for request-time scrapes.
+// It is safe to call from HTTP handlers.
+func (e *Exporter) UpdateNow() {
+	if atomic.LoadUint32(&e.started) == 0 {
+		return
+	}
+	// Ensure only one update runs at a time (prometheus client is not safe for concurrent writes).
+	e.updateMu.Lock()
+	defer e.updateMu.Unlock()
+	e.updateLocked()
+}
+
 func (e *Exporter) SetLastBlockIntervalSeconds(seconds float64) {
 	atomic.StoreUint64(&e.lastInterval, math.Float64bits(seconds))
 	atomic.StoreUint32(&e.lastIntervalSet, 1)
@@ -214,7 +227,7 @@ func (e *Exporter) GetAvgBlockTime100Seconds() float64 {
 	return 0
 }
 
-func (e *Exporter) update() {
+func (e *Exporter) updateLocked() {
 	vals := e.registry.GetValidators()
 	chainID := e.cfg.ChainID
 
