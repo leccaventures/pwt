@@ -20,6 +20,11 @@ import (
 	"lecca.io/pharos-watchtower/internal/validators"
 )
 
+const (
+	broadcastBufferSize = 100
+	writeTimeout        = 5 * time.Second
+)
+
 //go:embed static/*
 var staticFS embed.FS
 
@@ -47,7 +52,7 @@ func NewServer(cfg config.Config, reg *validators.Registry, nodeMgr *rpc.Manager
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
 		clients:   make(map[*websocket.Conn]bool),
-		broadcast: make(chan []byte),
+		broadcast: make(chan []byte, broadcastBufferSize),
 		logChan:   make(chan logger.LogEntry, 100), // Buffer logs
 	}
 
@@ -146,14 +151,26 @@ func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
 	// handleMessages/handleLogs to this connection (gorilla/websocket is not safe for concurrent write).
 	s.mu.Lock()
 	if state, err := s.getStateJSON(); err == nil {
-		_ = ws.WriteMessage(websocket.TextMessage, state)
+		_ = ws.SetWriteDeadline(time.Now().Add(writeTimeout))
+		if err := ws.WriteMessage(websocket.TextMessage, state); err != nil {
+			ws.Close()
+			delete(s.clients, ws)
+			s.mu.Unlock()
+			return
+		}
 	}
 	configMsg := map[string]interface{}{
 		"type":      "config",
 		"hide_logs": s.cfg.Advanced.HideLogs,
 	}
 	if bytes, err := json.Marshal(configMsg); err == nil {
-		_ = ws.WriteMessage(websocket.TextMessage, bytes)
+		_ = ws.SetWriteDeadline(time.Now().Add(writeTimeout))
+		if err := ws.WriteMessage(websocket.TextMessage, bytes); err != nil {
+			ws.Close()
+			delete(s.clients, ws)
+			s.mu.Unlock()
+			return
+		}
 	}
 	s.mu.Unlock()
 }
@@ -162,6 +179,7 @@ func (s *Server) handleMessages() {
 	for msg := range s.broadcast {
 		s.mu.Lock()
 		for client := range s.clients {
+			_ = client.SetWriteDeadline(time.Now().Add(writeTimeout))
 			err := client.WriteMessage(websocket.TextMessage, msg)
 			if err != nil {
 				client.Close()
@@ -196,7 +214,11 @@ func (s *Server) handleLogs() {
 			s.mu.Lock()
 			for client := range s.clients {
 				// Fire and forget logging to avoid blocking main updates
-				client.WriteMessage(websocket.TextMessage, bytes)
+				_ = client.SetWriteDeadline(time.Now().Add(writeTimeout))
+				if err := client.WriteMessage(websocket.TextMessage, bytes); err != nil {
+					client.Close()
+					delete(s.clients, client)
+				}
 			}
 			s.mu.Unlock()
 		}
@@ -214,7 +236,11 @@ func (s *Server) BroadcastUpdate() {
 		fmt.Printf("Failed to marshal state for broadcast: %v\n", err)
 		return
 	}
-	s.broadcast <- state
+	select {
+	case s.broadcast <- state:
+	default:
+		// Drop update if channel is full to avoid blocking.
+	}
 }
 
 func (s *Server) getStateJSON() ([]byte, error) {

@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/core/types"
@@ -39,6 +40,7 @@ type Processor struct {
 	cacheMu     sync.RWMutex
 	blockTime   map[uint64]uint64
 	cacheMin    uint64
+	nextNode    uint64
 }
 
 const blockTimeCacheSize = 200
@@ -54,6 +56,34 @@ func NewProcessor(cfg config.ChainConfig, advanced config.AdvancedConfig, nodeMg
 		exporter:    exporter,
 		blockTime:   make(map[uint64]uint64),
 	}
+}
+
+func (p *Processor) selectProofNode() *rpc.Node {
+	nodes := p.nodeMgr.GetNodes()
+	if len(nodes) == 0 {
+		return nil
+	}
+
+	var healthy []*rpc.Node
+	var healthySyncing []*rpc.Node
+	for _, n := range nodes {
+		status := n.GetStatus()
+		if status.Healthy && !status.Syncing {
+			healthy = append(healthy, n)
+		} else if status.Healthy {
+			healthySyncing = append(healthySyncing, n)
+		}
+	}
+
+	if len(healthy) == 0 {
+		healthy = healthySyncing
+	}
+	if len(healthy) == 0 {
+		return nil
+	}
+
+	idx := atomic.AddUint64(&p.nextNode, 1)
+	return healthy[int((idx-1)%uint64(len(healthy)))]
 }
 
 func (p *Processor) Start(ctx context.Context) {
@@ -102,14 +132,20 @@ func (p *Processor) processBlock(ctx context.Context, header *types.Header) {
 		p.broadcaster.BroadcastUpdate()
 	}
 
-	node := p.nodeMgr.GetBestNode()
+	node := p.selectProofNode()
 	if node == nil {
 		logger.Warn("PROC", "No healthy node to fetch proof for block %d", height)
 		return
 	}
 
 	// Check if RawRPC is initialized (it can be nil even if node is not nil)
-	// This can happen if the node became unhealthy between GetBestNode() and here
+	// This can happen if the node became unhealthy between selection and here
+	if node.RawRPC == nil {
+		fallback := p.nodeMgr.GetBestNode()
+		if fallback != nil {
+			node = fallback
+		}
+	}
 	if node.RawRPC == nil {
 		logger.Warn("PROC", "Node RPC client not initialized for block %d, skipping", height)
 		return
@@ -127,6 +163,18 @@ func (p *Processor) processBlock(ctx context.Context, header *types.Header) {
 		for height > nodeHeight && waited < maxWait {
 			time.Sleep(waitInterval)
 			waited += waitInterval
+			nodeHeight = node.GetBlockHeight()
+		}
+	}
+	if height > nodeHeight {
+		fallback := p.nodeMgr.GetBestNode()
+		if fallback != nil && fallback != node {
+			logger.Debug("PROC", "Assigned node %s behind for block %d (height=%d); falling back to %s", node.Config.Label, height, nodeHeight, fallback.Config.Label)
+			node = fallback
+			if node.RawRPC == nil {
+				logger.Warn("PROC", "Node RPC client not initialized for block %d, skipping", height)
+				return
+			}
 			nodeHeight = node.GetBlockHeight()
 		}
 	}

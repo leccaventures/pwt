@@ -177,7 +177,9 @@ func (e *Exporter) Start(ctx context.Context) {
 				return
 			case <-e.updateCh:
 				atomic.StoreUint32(&e.pendingUpdate, 0)
+				e.updateMu.Lock()
 				e.updateLocked()
+				e.updateMu.Unlock()
 			}
 		}
 	}()
