@@ -106,6 +106,68 @@ func (w *RollingWindow) GetBitmap() []bool {
 	return result
 }
 
+// GetBitmapLastN returns the participation status of the last N blocks in the window.
+// The order is from oldest to newest within the last N entries.
+func (w *RollingWindow) GetBitmapLastN(n int) []bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	if n <= 0 || len(w.items) == 0 {
+		return []bool{}
+	}
+
+	start := len(w.items) - n
+	if start < 0 {
+		start = 0
+	}
+
+	result := make([]bool, len(w.items)-start)
+	for i := start; i < len(w.items); i++ {
+		result[i-start] = w.items[i].participated
+	}
+	return result
+}
+
+// GetBitmapLastNByHeight returns the participation status for the last N heights.
+// Values: 1 = participated, 0 = missed, 2 = unknown (not yet observed).
+// The order is from oldest to newest within the last N heights.
+func (w *RollingWindow) GetBitmapLastNByHeight(lastHeight uint64, n int) []int {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	if n <= 0 || lastHeight == 0 || len(w.items) == 0 {
+		return []int{}
+	}
+
+	startHeight := int64(lastHeight) - int64(n) + 1
+	if startHeight < 1 {
+		startHeight = 1
+	}
+
+	lookup := make(map[uint64]bool, len(w.items))
+	for _, it := range w.items {
+		lookup[it.height] = it.participated
+	}
+
+	size := int(lastHeight - uint64(startHeight) + 1)
+	result := make([]int, size)
+	for i := 0; i < size; i++ {
+		height := uint64(startHeight) + uint64(i)
+		participated, ok := lookup[height]
+		if !ok {
+			result[i] = 2
+			continue
+		}
+		if participated {
+			result[i] = 1
+		} else {
+			result[i] = 0
+		}
+	}
+
+	return result
+}
+
 // GetLastParticipation returns the most recent participation entry.
 // ok is false if there is no data.
 func (w *RollingWindow) GetLastParticipation() (participated bool, height uint64, timestamp time.Time, ok bool) {

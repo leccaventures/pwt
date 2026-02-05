@@ -23,6 +23,7 @@ import (
 const (
 	broadcastBufferSize = 100
 	writeTimeout        = 5 * time.Second
+	windowBitmapLimit   = 100
 )
 
 //go:embed static/*
@@ -39,13 +40,13 @@ type ValidatorDTO struct {
 	LastSeen   string  `json:"last_seen"`
 	Down       bool    `json:"down"`
 	Staking    string  `json:"staking"`
-	Window     []bool  `json:"window,omitempty"`
+	Window     []int   `json:"window,omitempty"`
 }
 
 type ValidatorWindowDTO struct {
 	ID      string `json:"id"`
 	Moniker string `json:"moniker"`
-	Window  []bool `json:"window"`
+	Window  []int  `json:"window"`
 }
 
 type NodeDTO struct {
@@ -67,6 +68,21 @@ type StateDTO struct {
 }
 
 type BlockTimeDTO struct {
+	AvgBlockTime float64 `json:"avg_block_time"`
+}
+
+type validatorsMessage struct {
+	Type       string         `json:"type"`
+	Validators []ValidatorDTO `json:"validators"`
+}
+
+type nodesMessage struct {
+	Type  string    `json:"type"`
+	Nodes []NodeDTO `json:"nodes"`
+}
+
+type blockTimeMessage struct {
+	Type         string  `json:"type"`
 	AvgBlockTime float64 `json:"avg_block_time"`
 }
 
@@ -196,14 +212,11 @@ func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
 	// Send initial state and config while holding mu so no concurrent write from
 	// handleMessages/handleLogs to this connection (gorilla/websocket is not safe for concurrent write).
 	s.mu.Lock()
-	if state, err := s.getStateJSON(); err == nil {
-		_ = ws.SetWriteDeadline(time.Now().Add(writeTimeout))
-		if err := ws.WriteMessage(websocket.TextMessage, state); err != nil {
-			ws.Close()
-			delete(s.clients, ws)
-			s.mu.Unlock()
-			return
-		}
+	if err := s.writeInitialState(ws); err != nil {
+		ws.Close()
+		delete(s.clients, ws)
+		s.mu.Unlock()
+		return
 	}
 	configMsg := map[string]interface{}{
 		"type":      "config",
@@ -277,16 +290,19 @@ func (s *Server) BroadcastUpdate() {
 		return
 	}
 
-	state, err := s.getStateJSON()
-	if err != nil {
-		fmt.Printf("Failed to marshal state for broadcast: %v\n", err)
-		return
-	}
-	select {
-	case s.broadcast <- state:
-	default:
-		// Drop update if channel is full to avoid blocking.
-	}
+	vals := s.registry.GetValidators()
+	s.broadcastPayload(validatorsMessage{
+		Type:       "validators",
+		Validators: s.buildValidatorDTOs(vals, true),
+	})
+	s.broadcastPayload(nodesMessage{
+		Type:  "nodes",
+		Nodes: s.buildNodeDTOs(),
+	})
+	s.broadcastPayload(blockTimeMessage{
+		Type:         "blocktime",
+		AvgBlockTime: s.getAvgBlockTime(vals),
+	})
 }
 
 func (s *Server) getStateJSON() ([]byte, error) {
@@ -303,6 +319,7 @@ func (s *Server) getStateJSON() ([]byte, error) {
 
 func (s *Server) buildValidatorDTOs(vals map[string]*validators.ValidatorState, includeWindow bool) []ValidatorDTO {
 	validatorDTOs := make([]ValidatorDTO, 0, len(vals))
+	baseHeight := s.getWindowBaseHeight(vals)
 	for _, v := range vals {
 		missed, total, ratio := v.Window.GetStats()
 		uptime := 0.0
@@ -333,7 +350,7 @@ func (s *Server) buildValidatorDTOs(vals map[string]*validators.ValidatorState, 
 			Staking:    staking,
 		}
 		if includeWindow {
-			dto.Window = v.Window.GetBitmap()
+			dto.Window = v.Window.GetBitmapLastNByHeight(baseHeight, windowBitmapLimit)
 		}
 		validatorDTOs = append(validatorDTOs, dto)
 	}
@@ -347,11 +364,12 @@ func (s *Server) buildValidatorDTOs(vals map[string]*validators.ValidatorState, 
 
 func (s *Server) buildValidatorWindows(vals map[string]*validators.ValidatorState) []ValidatorWindowDTO {
 	windowDTOs := make([]ValidatorWindowDTO, 0, len(vals))
+	baseHeight := s.getWindowBaseHeight(vals)
 	for _, v := range vals {
 		windowDTOs = append(windowDTOs, ValidatorWindowDTO{
 			ID:      v.Meta.ValidatorID,
 			Moniker: v.Meta.Description,
-			Window:  v.Window.GetBitmap(),
+			Window:  v.Window.GetBitmapLastNByHeight(baseHeight, windowBitmapLimit),
 		})
 	}
 
@@ -402,6 +420,32 @@ func (s *Server) getAvgBlockTime(vals map[string]*validators.ValidatorState) flo
 	return 0
 }
 
+func (s *Server) getWindowBaseHeight(vals map[string]*validators.ValidatorState) uint64 {
+	if s.nodeMgr != nil {
+		nodes := s.nodeMgr.GetNodes()
+		var maxHeight uint64
+		for _, n := range nodes {
+			status := n.GetStatus()
+			if status.BlockHeight > maxHeight {
+				maxHeight = status.BlockHeight
+			}
+		}
+		if maxHeight > 0 {
+			return maxHeight
+		}
+	}
+
+	var maxHeight uint64
+	for _, v := range vals {
+		v.Mu.RLock()
+		if v.LastHeight > maxHeight {
+			maxHeight = v.LastHeight
+		}
+		v.Mu.RUnlock()
+	}
+	return maxHeight
+}
+
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	state, err := s.getStateJSON()
 	if err != nil {
@@ -410,6 +454,42 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(state)
+}
+
+func (s *Server) writeInitialState(ws *websocket.Conn) error {
+	vals := s.registry.GetValidators()
+	if err := s.writeWSMessage(ws, validatorsMessage{Type: "validators", Validators: s.buildValidatorDTOs(vals, true)}); err != nil {
+		return err
+	}
+	if err := s.writeWSMessage(ws, nodesMessage{Type: "nodes", Nodes: s.buildNodeDTOs()}); err != nil {
+		return err
+	}
+	if err := s.writeWSMessage(ws, blockTimeMessage{Type: "blocktime", AvgBlockTime: s.getAvgBlockTime(vals)}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Server) writeWSMessage(ws *websocket.Conn, payload interface{}) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	_ = ws.SetWriteDeadline(time.Now().Add(writeTimeout))
+	return ws.WriteMessage(websocket.TextMessage, data)
+}
+
+func (s *Server) broadcastPayload(payload interface{}) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		fmt.Printf("Failed to marshal broadcast payload: %v\n", err)
+		return
+	}
+	select {
+	case s.broadcast <- data:
+	default:
+		// Drop update if channel is full to avoid blocking.
+	}
 }
 
 func (s *Server) handleValidators(w http.ResponseWriter, r *http.Request) {
