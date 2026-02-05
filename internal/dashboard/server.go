@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,12 +42,14 @@ type ValidatorDTO struct {
 	Down       bool    `json:"down"`
 	Staking    string  `json:"staking"`
 	Window     []int   `json:"window,omitempty"`
+	Priority   bool    `json:"-"`
 }
 
 type ValidatorWindowDTO struct {
-	ID      string `json:"id"`
-	Moniker string `json:"moniker"`
-	Window  []int  `json:"window"`
+	ID       string `json:"id"`
+	Moniker  string `json:"moniker"`
+	Window   []int  `json:"window"`
+	Priority bool   `json:"-"`
 }
 
 type NodeDTO struct {
@@ -319,6 +322,7 @@ func (s *Server) getStateJSON() ([]byte, error) {
 
 func (s *Server) buildValidatorDTOs(vals map[string]*validators.ValidatorState, includeWindow bool) []ValidatorDTO {
 	validatorDTOs := make([]ValidatorDTO, 0, len(vals))
+	prioritySet := s.getValidatorPrioritySet()
 	baseHeight := s.getWindowBaseHeight(vals)
 	for _, v := range vals {
 		missed, total, ratio := v.Window.GetStats()
@@ -348,6 +352,7 @@ func (s *Server) buildValidatorDTOs(vals map[string]*validators.ValidatorState, 
 			LastSeen:   lastSeen,
 			Down:       down,
 			Staking:    staking,
+			Priority:   prioritySet[v.Meta.BlsKeyHex],
 		}
 		if includeWindow {
 			dto.Window = v.Window.GetBitmapLastNByHeight(baseHeight, windowBitmapLimit)
@@ -356,7 +361,15 @@ func (s *Server) buildValidatorDTOs(vals map[string]*validators.ValidatorState, 
 	}
 
 	sort.Slice(validatorDTOs, func(i, j int) bool {
-		return validatorDTOs[i].ID < validatorDTOs[j].ID
+		if validatorDTOs[i].Priority != validatorDTOs[j].Priority {
+			return validatorDTOs[i].Priority
+		}
+		mi := strings.ToLower(validatorDTOs[i].Moniker)
+		mj := strings.ToLower(validatorDTOs[j].Moniker)
+		if mi == mj {
+			return validatorDTOs[i].ID < validatorDTOs[j].ID
+		}
+		return mi < mj
 	})
 
 	return validatorDTOs
@@ -364,17 +377,27 @@ func (s *Server) buildValidatorDTOs(vals map[string]*validators.ValidatorState, 
 
 func (s *Server) buildValidatorWindows(vals map[string]*validators.ValidatorState) []ValidatorWindowDTO {
 	windowDTOs := make([]ValidatorWindowDTO, 0, len(vals))
+	prioritySet := s.getValidatorPrioritySet()
 	baseHeight := s.getWindowBaseHeight(vals)
 	for _, v := range vals {
 		windowDTOs = append(windowDTOs, ValidatorWindowDTO{
-			ID:      v.Meta.ValidatorID,
-			Moniker: v.Meta.Description,
-			Window:  v.Window.GetBitmapLastNByHeight(baseHeight, windowBitmapLimit),
+			ID:       v.Meta.ValidatorID,
+			Moniker:  v.Meta.Description,
+			Window:   v.Window.GetBitmapLastNByHeight(baseHeight, windowBitmapLimit),
+			Priority: prioritySet[v.Meta.BlsKeyHex],
 		})
 	}
 
 	sort.Slice(windowDTOs, func(i, j int) bool {
-		return windowDTOs[i].ID < windowDTOs[j].ID
+		if windowDTOs[i].Priority != windowDTOs[j].Priority {
+			return windowDTOs[i].Priority
+		}
+		mi := strings.ToLower(windowDTOs[i].Moniker)
+		mj := strings.ToLower(windowDTOs[j].Moniker)
+		if mi == mj {
+			return windowDTOs[i].ID < windowDTOs[j].ID
+		}
+		return mi < mj
 	})
 
 	return windowDTOs
@@ -386,6 +409,19 @@ func (s *Server) buildNodeDTOs() []NodeDTO {
 	}
 
 	nodes := s.nodeMgr.GetNodes()
+	sort.Slice(nodes, func(i, j int) bool {
+		ai := nodes[i].Config.AlertOnDown
+		aj := nodes[j].Config.AlertOnDown
+		if ai != aj {
+			return ai
+		}
+		li := strings.ToLower(nodes[i].Config.Label)
+		lj := strings.ToLower(nodes[j].Config.Label)
+		if li == lj {
+			return nodes[i].Config.RPC < nodes[j].Config.RPC
+		}
+		return li < lj
+	})
 	nodeDTOs := make([]NodeDTO, 0, len(nodes))
 	for _, n := range nodes {
 		status := n.GetStatus()
@@ -418,6 +454,14 @@ func (s *Server) getAvgBlockTime(vals map[string]*validators.ValidatorState) flo
 		return v.Window.GetAvgBlockTime()
 	}
 	return 0
+}
+
+func (s *Server) getValidatorPrioritySet() map[string]bool {
+	set := make(map[string]bool, len(s.cfg.Chain.Validators))
+	for _, key := range s.cfg.Chain.Validators {
+		set[validators.NormalizeBlsKey(key)] = true
+	}
+	return set
 }
 
 func (s *Server) getWindowBaseHeight(vals map[string]*validators.ValidatorState) uint64 {
