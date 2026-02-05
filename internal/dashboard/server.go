@@ -28,6 +28,48 @@ const (
 //go:embed static/*
 var staticFS embed.FS
 
+type ValidatorDTO struct {
+	ID         string  `json:"id"`
+	Moniker    string  `json:"moniker"`
+	Status     uint8   `json:"status"`
+	Missed     int     `json:"missed"`
+	Total      int     `json:"total"`
+	Uptime     float64 `json:"uptime"`
+	LastHeight uint64  `json:"last_height"`
+	LastSeen   string  `json:"last_seen"`
+	Down       bool    `json:"down"`
+	Staking    string  `json:"staking"`
+	Window     []bool  `json:"window,omitempty"`
+}
+
+type ValidatorWindowDTO struct {
+	ID      string `json:"id"`
+	Moniker string `json:"moniker"`
+	Window  []bool `json:"window"`
+}
+
+type NodeDTO struct {
+	Label       string `json:"label"`
+	RpcUrl      string `json:"rpc_url"`
+	WsUrl       string `json:"ws_url"`
+	Healthy     bool   `json:"healthy"`
+	BlockHeight uint64 `json:"block_height"`
+	Syncing     bool   `json:"syncing"`
+	Latency     string `json:"latency"`
+	LastError   string `json:"last_error,omitempty"`
+	LastCheck   string `json:"last_check"`
+}
+
+type StateDTO struct {
+	AvgBlockTime float64        `json:"avg_block_time"`
+	Validators   []ValidatorDTO `json:"validators"`
+	Nodes        []NodeDTO      `json:"nodes"`
+}
+
+type BlockTimeDTO struct {
+	AvgBlockTime float64 `json:"avg_block_time"`
+}
+
 type Server struct {
 	cfg      config.Config
 	registry *validators.Registry
@@ -74,6 +116,10 @@ func (s *Server) Start(ctx context.Context) {
 		go s.handleLogs() // Start log handler
 		go s.runServer(ctx, s.cfg.Advanced.DashboardPort, func(mux *http.ServeMux) {
 			mux.HandleFunc("/api/state", s.handleState)
+			mux.HandleFunc("/api/validators", s.handleValidators)
+			mux.HandleFunc("/api/validators/windows", s.handleValidatorWindows)
+			mux.HandleFunc("/api/nodes", s.handleNodes)
+			mux.HandleFunc("/api/blocktime", s.handleBlockTime)
 			mux.HandleFunc("/ws", s.handleConnections)
 
 			fileServer := http.FileServer(http.FS(staticFS))
@@ -246,42 +292,19 @@ func (s *Server) BroadcastUpdate() {
 func (s *Server) getStateJSON() ([]byte, error) {
 	vals := s.registry.GetValidators()
 
-	type ValidatorDTO struct {
-		ID         string  `json:"id"`
-		Moniker    string  `json:"moniker"`
-		Status     uint8   `json:"status"`
-		Missed     int     `json:"missed"`
-		Total      int     `json:"total"`
-		Uptime     float64 `json:"uptime"`
-		LastHeight uint64  `json:"last_height"`
-		LastSeen   string  `json:"last_seen"`
-		Down       bool    `json:"down"`
-		Staking    string  `json:"staking"`
-		Window     []bool  `json:"window"`
+	state := StateDTO{
+		AvgBlockTime: s.getAvgBlockTime(vals),
+		Validators:   s.buildValidatorDTOs(vals, true),
+		Nodes:        s.buildNodeDTOs(),
 	}
 
-	type NodeDTO struct {
-		Label       string `json:"label"`
-		RpcUrl      string `json:"rpc_url"`
-		WsUrl       string `json:"ws_url"`
-		Healthy     bool   `json:"healthy"`
-		BlockHeight uint64 `json:"block_height"`
-		Syncing     bool   `json:"syncing"`
-		Latency     string `json:"latency"`
-		LastError   string `json:"last_error,omitempty"`
-		LastCheck   string `json:"last_check"`
-	}
+	return json.Marshal(state)
+}
 
-	type StateDTO struct {
-		AvgBlockTime float64        `json:"avg_block_time"`
-		Validators   []ValidatorDTO `json:"validators"`
-		Nodes        []NodeDTO      `json:"nodes"`
-	}
-
-	var validatorDTOs []ValidatorDTO
+func (s *Server) buildValidatorDTOs(vals map[string]*validators.ValidatorState, includeWindow bool) []ValidatorDTO {
+	validatorDTOs := make([]ValidatorDTO, 0, len(vals))
 	for _, v := range vals {
 		missed, total, ratio := v.Window.GetStats()
-		window := v.Window.GetBitmap() // Get historical data
 		uptime := 0.0
 		if total > 0 {
 			uptime = 1.0 - ratio
@@ -297,7 +320,7 @@ func (s *Server) getStateJSON() ([]byte, error) {
 		}
 		v.Mu.RUnlock()
 
-		validatorDTOs = append(validatorDTOs, ValidatorDTO{
+		dto := ValidatorDTO{
 			ID:         v.Meta.ValidatorID,
 			Moniker:    v.Meta.Description,
 			Status:     v.Meta.Status,
@@ -308,57 +331,75 @@ func (s *Server) getStateJSON() ([]byte, error) {
 			LastSeen:   lastSeen,
 			Down:       down,
 			Staking:    staking,
-			Window:     window,
-		})
+		}
+		if includeWindow {
+			dto.Window = v.Window.GetBitmap()
+		}
+		validatorDTOs = append(validatorDTOs, dto)
 	}
 
 	sort.Slice(validatorDTOs, func(i, j int) bool {
 		return validatorDTOs[i].ID < validatorDTOs[j].ID
 	})
 
-	// Get node information
-	var nodeDTOs []NodeDTO
-	if s.nodeMgr != nil {
-		nodes := s.nodeMgr.GetNodes()
-		for _, n := range nodes {
-			status := n.GetStatus()
-			lastError := ""
-			if status.LastError != nil {
-				lastError = status.LastError.Error()
-			}
+	return validatorDTOs
+}
 
-			nodeDTOs = append(nodeDTOs, NodeDTO{
-				Label:       n.Config.Label,
-				RpcUrl:      n.Config.RPC,
-				WsUrl:       n.Config.WS,
-				Healthy:     status.Healthy,
-				BlockHeight: status.BlockHeight,
-				Syncing:     status.Syncing,
-				Latency:     status.Latency.String(),
-				LastError:   lastError,
-				LastCheck:   status.LastCheck.Format(time.RFC3339),
-			})
-		}
+func (s *Server) buildValidatorWindows(vals map[string]*validators.ValidatorState) []ValidatorWindowDTO {
+	windowDTOs := make([]ValidatorWindowDTO, 0, len(vals))
+	for _, v := range vals {
+		windowDTOs = append(windowDTOs, ValidatorWindowDTO{
+			ID:      v.Meta.ValidatorID,
+			Moniker: v.Meta.Description,
+			Window:  v.Window.GetBitmap(),
+		})
 	}
 
-	// Calculate average block time from first validator (network property)
-	var avgBlockTime float64
+	sort.Slice(windowDTOs, func(i, j int) bool {
+		return windowDTOs[i].ID < windowDTOs[j].ID
+	})
+
+	return windowDTOs
+}
+
+func (s *Server) buildNodeDTOs() []NodeDTO {
+	if s.nodeMgr == nil {
+		return nil
+	}
+
+	nodes := s.nodeMgr.GetNodes()
+	nodeDTOs := make([]NodeDTO, 0, len(nodes))
+	for _, n := range nodes {
+		status := n.GetStatus()
+		lastError := ""
+		if status.LastError != nil {
+			lastError = status.LastError.Error()
+		}
+
+		nodeDTOs = append(nodeDTOs, NodeDTO{
+			Label:       n.Config.Label,
+			RpcUrl:      n.Config.RPC,
+			WsUrl:       n.Config.WS,
+			Healthy:     status.Healthy,
+			BlockHeight: status.BlockHeight,
+			Syncing:     status.Syncing,
+			Latency:     status.Latency.String(),
+			LastError:   lastError,
+			LastCheck:   status.LastCheck.Format(time.RFC3339),
+		})
+	}
+
+	return nodeDTOs
+}
+
+func (s *Server) getAvgBlockTime(vals map[string]*validators.ValidatorState) float64 {
 	if s.exporter != nil {
-		avgBlockTime = s.exporter.GetAvgBlockTime100Seconds() * 1000
-	} else if len(vals) > 0 {
-		for _, v := range vals {
-			avgBlockTime = v.Window.GetAvgBlockTime()
-			break // Just need one validator for network block time
-		}
+		return s.exporter.GetAvgBlockTime100Seconds() * 1000
 	}
-
-	state := StateDTO{
-		AvgBlockTime: avgBlockTime,
-		Validators:   validatorDTOs,
-		Nodes:        nodeDTOs,
+	for _, v := range vals {
+		return v.Window.GetAvgBlockTime()
 	}
-
-	return json.Marshal(state)
+	return 0
 }
 
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
@@ -369,4 +410,36 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(state)
+}
+
+func (s *Server) handleValidators(w http.ResponseWriter, r *http.Request) {
+	vals := s.registry.GetValidators()
+	validatorDTOs := s.buildValidatorDTOs(vals, false)
+	writeJSON(w, validatorDTOs)
+}
+
+func (s *Server) handleValidatorWindows(w http.ResponseWriter, r *http.Request) {
+	vals := s.registry.GetValidators()
+	windows := s.buildValidatorWindows(vals)
+	writeJSON(w, windows)
+}
+
+func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
+	nodes := s.buildNodeDTOs()
+	writeJSON(w, nodes)
+}
+
+func (s *Server) handleBlockTime(w http.ResponseWriter, r *http.Request) {
+	vals := s.registry.GetValidators()
+	writeJSON(w, BlockTimeDTO{AvgBlockTime: s.getAvgBlockTime(vals)})
+}
+
+func writeJSON(w http.ResponseWriter, payload interface{}) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
 }

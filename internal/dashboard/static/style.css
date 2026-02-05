@@ -219,3 +219,28 @@ tr:hover { background-color: var(--row-hover); }
 	color: var(--table-header);
 	letter-spacing: 1px;
 }
+
+.footer {
+	margin-top: 40px;
+	text-align: center;
+	font-size: 0.9rem;
+	color: var(--table-header);
+}
+
+.footer-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--table-header);
+	text-decoration: none;
+}
+
+.footer-link:hover {
+	color: var(--link-color);
+}
+
+.footer-icon {
+	width: 20px;
+	height: 20px;
+	fill: currentColor;
+}
