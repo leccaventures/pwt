@@ -18,4 +18,4 @@ services:
       - ./config.yml:/root/.pwt/config.yml:ro
       - ./data:/root/.pwt/data
     command:
-      ["--config", "/root/.pwt/config.yml", "--data-dir", "/root/.pwt/data"]
+      ["start", "--config", "/root/.pwt/config.yml", "--data-dir", "/root/.pwt/data"]
