@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -9,9 +10,26 @@ import (
 )
 
 func parseFlags() (string, string, error) {
-	configFile := flag.String("config", "", "path to config file")
-	dataDir := flag.String("data-dir", "", "path to data directory")
-	flag.Parse()
+	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	configFile := fs.String("config", "", "path to config file")
+	dataDir := fs.String("data-dir", "", "path to data directory")
+	usage := func() {
+		defaultConfig, defaultData := defaultPaths()
+		fmt.Fprintln(os.Stderr, "Usage: pharos-watchtower start [flags]\n")
+		fmt.Fprintf(os.Stderr, "Defaults:\n  config: %s\n  data-dir: %s\n\n", defaultConfig, defaultData)
+		fs.PrintDefaults()
+	}
+
+	if len(os.Args) < 2 || os.Args[1] != "start" {
+		usage()
+		return "", "", flag.ErrHelp
+	}
+
+	if err := fs.Parse(os.Args[2:]); err != nil {
+		usage()
+		return "", "", err
+	}
 
 	configPath, baseDir, err := resolveConfigPath(*configFile)
 	if err != nil {
@@ -40,6 +58,15 @@ func resolveConfigPath(configFile string) (string, string, error) {
 	}
 	baseDir := filepath.Join(home, ".pwt")
 	return filepath.Join(baseDir, "config.yml"), baseDir, nil
+}
+
+func defaultPaths() (string, string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", ""
+	}
+	baseDir := filepath.Join(home, ".pwt")
+	return filepath.Join(baseDir, "config.yml"), filepath.Join(baseDir, "data")
 }
 
 func applyDataDirDefaults(cfg *config.Config, dataDir string) {

@@ -23,4 +23,4 @@ COPY --from=builder /out/pharos-watchtower /app/pharos-watchtower
 
 EXPOSE 8080 8089
 
-ENTRYPOINT ["/app/pharos-watchtower"]
+ENTRYPOINT ["/app/pharos-watchtower", "start"]

@@ -9,6 +9,7 @@
 	--success-dim: #b2bec3; /* For normal blocks */
 	--error: #ff7675;   /* Soft Red */
 	--warning: #ffeaa7;
+	--pending: #ffeaa7;
 	--link-color: #0984e3;
 	--row-hover: rgba(0,0,0,0.02);
 }
@@ -24,6 +25,7 @@
 	--success-dim: #2d3436; /* Dark Grey for signed blocks (background-like) */
 	--error: #ff7675;   /* Soft Red */
 	--warning: #fdcb6e; /* Orange */
+	--pending: #fdcb6e;
 	--link-color: #74b9ff;
 	--row-hover: rgba(255,255,255,0.03);
 }
@@ -218,4 +220,29 @@ tr:hover { background-color: var(--row-hover); }
 	text-transform: uppercase;
 	color: var(--table-header);
 	letter-spacing: 1px;
+}
+
+.footer {
+	margin-top: 40px;
+	text-align: center;
+	font-size: 0.9rem;
+	color: var(--table-header);
+}
+
+.footer-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--table-header);
+	text-decoration: none;
+}
+
+.footer-link:hover {
+	color: var(--link-color);
+}
+
+.footer-icon {
+	width: 20px;
+	height: 20px;
+	fill: currentColor;
 }

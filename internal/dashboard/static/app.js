@@ -67,6 +67,21 @@ function connect() {
 				return;
 			}
 
+			if (data.type === 'validators') {
+				render({ validators: data.validators });
+				return;
+			}
+
+			if (data.type === 'nodes') {
+				render({ nodes: data.nodes });
+				return;
+			}
+
+			if (data.type === 'blocktime') {
+				render({ avg_block_time: data.avg_block_time });
+				return;
+			}
+
 			render(data);
 		} catch(e) {
 			console.error('Parse error:', e);
@@ -123,11 +138,14 @@ function drawActivity(canvasId, windowData) {
 
 	for (let i = 0; i < cellCount; i++) {
 		const x = i * (cellWidth + GAP);
+		const state = displayData[i];
 		
-		if (displayData[i]) {
+		if (state === 1) {
 			ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--success-dim');
-		} else {
+		} else if (state === 0) {
 			ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--error');
+		} else {
+			ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--pending');
 		}
 
 		ctx.fillRect(x, 0, cellWidth, height);
