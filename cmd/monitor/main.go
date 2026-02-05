@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"os"
 	"os/signal"
 	"syscall"
@@ -24,6 +25,9 @@ func main() {
 
 	configPath, dataDir, err := parseFlags()
 	if err != nil {
+		if err == flag.ErrHelp {
+			os.Exit(0)
+		}
 		logger.Error("INIT", "Failed to resolve config path: %v", err)
 		os.Exit(1)
 	}
