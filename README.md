@@ -27,6 +27,10 @@ Pharos Watchtower is a real-time monitoring service for validator participation 
 - Replace/augment RPC-derived metrics with **WS/GRPC-based** sources where possible
 - Improve **node syncing** detection beyond the current RPC `SyncProgress` check
 
+## Documentation
+- [API Reference](docs/api.md)
+- [Metrics Reference](docs/metrics.md)
+
 ## Binary
 
 ### Requirements
