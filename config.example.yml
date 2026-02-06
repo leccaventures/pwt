@@ -122,8 +122,14 @@ advanced:
     # WebSocket read timeout (default: 30s)
     ws_timeout: '30s'
 
-    # Port to listen on for the web dashboard (default: 8888, 0 = disabled)
-    dashboard_port: 8888
+    # Web dashboard settings
+    dashboard:
+        # Enable the web dashboard (default: false)
+        enable: false
+        # Listen address (default: tcp://127.0.0.1:8888)
+        # - tcp://0.0.0.0:8888  -> external access
+        # - tcp://127.0.0.1:8888 -> localhost only
+        laddr: "tcp://127.0.0.1:8888"
 
     # Whether to hide live logs in the dashboard (default: false)
     hide_logs: false
@@ -135,7 +141,11 @@ advanced:
     contract_addr: '0x4100000000000000000000000000000000000000'
     # Prometheus settings
     prometheus:
+        # Enable Prometheus metrics (default: false)
+        enable: false
+        # Listen address (default: tcp://127.0.0.1:9999)
+        # - tcp://0.0.0.0:9999  -> external access
+        # - tcp://127.0.0.1:9999 -> localhost only
+        laddr: "tcp://127.0.0.1:9999"
         # Metrics name prefix (default: pharos)
         metrics_prefix: 'pharos'
-        # Port to expose Prometheus metrics on (default: 9999, 0 = disabled)
-        port: 9999
