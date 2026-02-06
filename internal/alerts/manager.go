@@ -12,6 +12,23 @@ import (
 	"lecca.io/pharos-watchtower/internal/validators"
 )
 
+// Track last height and when it last advanced for each node label
+type nodeHeightTrack struct {
+	lastHeight    uint64
+	lastAdvanceAt time.Time
+}
+
+// nodeStallSnapshot is minimal view of node used for stall evaluation
+// this makes the stall logic easy to unit-test without depending on real rpc.Manager
+type nodeStallSnapshot struct {
+	Label       string
+	RPC         string
+	AlertOnDown bool
+	Healthy     bool
+	Syncing     bool
+	Height      uint64
+}
+
 type Manager struct {
 	cfg             config.AlertsConfig
 	chainID         string
@@ -21,6 +38,7 @@ type Manager struct {
 	notifier        Notifier
 	state           *StateStore
 	alerts          map[string]AlertStateItem
+	nodeHeight      map[string]nodeHeightTrack
 	mu              sync.Mutex
 }
 
@@ -34,6 +52,7 @@ func NewManager(cfg config.AlertsConfig, chainID string, stateFile string, valid
 		notifier:        NewNotifier(cfg),
 		state:           NewStateStore(stateFile),
 		alerts:          make(map[string]AlertStateItem),
+		nodeHeight:      make(map[string]nodeHeightTrack),
 	}
 }
 
@@ -96,6 +115,11 @@ func (m *Manager) checkRules(ctx context.Context) {
 	// Check node rules
 	if m.cfg.Rules.NodeDown.Enabled() {
 		m.checkNodeDown(ctx, now)
+	}
+
+	// Check node height stall rule (RuleNodeHeightStalled)
+	if m.cfg.Rules.NodeStall.Enabled() {
+		m.checkNodeHeightStalled(ctx, now)
 	}
 
 	// Check WS rules
@@ -307,6 +331,165 @@ func (m *Manager) checkNodeDown(ctx context.Context, now time.Time) {
 				}
 				delete(m.alerts, key)
 			}
+		}
+	}
+}
+
+// Node height stalled alert implementation
+func (m *Manager) checkNodeHeightStalled(ctx context.Context, now time.Time) {
+	if m.nodeMgr == nil {
+		return
+	}
+
+	fireDuration := m.cfg.Rules.NodeStall.FireDuration()
+	if fireDuration <= 0 {
+		return
+	}
+
+	nodes := m.nodeMgr.GetNodes()
+
+	snaps := make([]nodeStallSnapshot, 0, len(nodes))
+	for _, n := range nodes {
+		status := n.GetStatus()
+
+		snaps = append(snaps, nodeStallSnapshot{
+			Label:       n.Config.Label,
+			RPC:         n.Config.RPC,
+			AlertOnDown: n.Config.AlertOnDown,
+			Healthy:     status.Healthy,
+			Syncing:     status.Syncing,
+			Height:      status.BlockHeight,
+		})
+	}
+
+	m.checkNodeHeightStalledWithSnapshots(ctx, now, fireDuration, snaps)
+}
+
+func (m *Manager) checkNodeHeightStalledWithSnapshots(
+	ctx context.Context,
+	now time.Time,
+	fireDuration time.Duration,
+	nodes []nodeStallSnapshot,
+) {
+	if fireDuration <= 0 {
+		return
+	}
+
+	for _, n := range nodes {
+		if !n.AlertOnDown {
+			continue
+		}
+
+		label := n.Label
+		height := n.Height
+		key := fmt.Sprintf("node_stall:%s", label)
+
+		// If WS is not configured, height stays 0
+		// So: don't trigger stall alerts when height is 0
+		if height == 0 {
+			delete(m.alerts, key)
+			m.nodeHeight[label] = nodeHeightTrack{lastHeight: height, lastAdvanceAt: now}
+			continue
+		}
+
+		// Only consider "stalled" when node is healthy and not syncing
+		// If it's unhealthy/syncing, reset baseline and clear stall tracking
+		if !n.Healthy || n.Syncing {
+			delete(m.alerts, key)
+			m.nodeHeight[label] = nodeHeightTrack{lastHeight: height, lastAdvanceAt: now}
+			continue
+		}
+
+		track, ok := m.nodeHeight[label]
+		if !ok {
+			m.nodeHeight[label] = nodeHeightTrack{lastHeight: height, lastAdvanceAt: now}
+			continue
+		}
+
+		state, exists := m.alerts[key]
+
+		// Height advanced => updated baseline and resolve stall alert if it was fired
+		if height > track.lastHeight {
+			track.lastHeight = height
+			track.lastAdvanceAt = now
+			m.nodeHeight[label] = track
+
+			if exists && state.Status == AlertFiring {
+				if !state.LastEventAt.IsZero() {
+					stallDuration := now.Sub(state.FiringSince).Round(time.Second)
+					event := AlertEvent{
+						Key:         key,
+						RuleID:      RuleNodeHeightStalled,
+						SubjectType: SubjectNode,
+						SubjectID:   label,
+						SubjectName: label,
+						ChainID:     m.chainID,
+						Status:      AlertResolved,
+						Severity:    "info",
+						Title:       "Node Height Recovered",
+						Message:     fmt.Sprintf("Node %s (%s) height advanced again (current height: %d) after being stalled for %v", label, n.RPC, height, stallDuration),
+						Details: []AlertDetail{
+							{Label: "Stalled For", Value: stallDuration.String()},
+							{Label: "Current Height", Value: fmt.Sprintf("%d", height)},
+						},
+						Timestamp: now,
+					}
+					_ = m.notifier.Notify(ctx, event)
+				}
+				delete(m.alerts, key)
+			}
+			continue
+		}
+
+		// No progress => check stall duration since last advance
+		stalledFor := now.Sub(track.lastAdvanceAt)
+		if stalledFor < fireDuration {
+			continue
+		}
+
+		// Start tracking stall state if needed
+		if !exists {
+			state = AlertStateItem{
+				Key:          key,
+				RuleID:       RuleNodeHeightStalled,
+				SubjectType:  SubjectNode,
+				SubjectID:    label,
+				Status:       AlertFiring,
+				FiringSince:  track.lastAdvanceAt,
+				LastObserved: now,
+			}
+		} else {
+			state.LastObserved = now
+			if state.FiringSince.IsZero() {
+				state.FiringSince = track.lastAdvanceAt
+			}
+		}
+		m.alerts[key] = state
+
+		// Fire once
+		if state.LastEventAt.IsZero() {
+			actualStall := now.Sub(state.FiringSince).Round(time.Second)
+			event := AlertEvent{
+				Key:         key,
+				RuleID:      RuleNodeHeightStalled,
+				SubjectType: SubjectNode,
+				SubjectID:   label,
+				SubjectName: label,
+				ChainID:     m.chainID,
+				Status:      AlertFiring,
+				Severity:    "warning",
+				Title:       "Node Height Stalled",
+				Message:     fmt.Sprintf("Node %s (%s) height has not advanced for %v (current height: %d)", label, n.RPC, actualStall, height),
+				Details: []AlertDetail{
+					{Label: "Stalled For", Value: actualStall.String()},
+					{Label: "Current Height", Value: fmt.Sprintf("%d", height)},
+				},
+				Timestamp: now,
+			}
+			_ = m.notifier.Notify(ctx, event)
+
+			state.LastEventAt = now
+			m.alerts[key] = state
 		}
 	}
 }
