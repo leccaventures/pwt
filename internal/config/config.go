@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -102,15 +103,25 @@ type AdvancedConfig struct {
 	ReloadInterval string           `yaml:"reload_interval"`
 	RPCTimeout     string           `yaml:"rpc_timeout"`
 	WSTimeout      string           `yaml:"ws_timeout"`
-	DashboardPort  int              `yaml:"dashboard_port"`
+	Dashboard      DashboardConfig  `yaml:"dashboard"`
 	Prometheus     PrometheusConfig `yaml:"prometheus"`
 	HideLogs       bool             `yaml:"hide_logs"`
 	StateFile      string           `yaml:"state_file"`
 	ContractAddr   string           `yaml:"contract_addr"`
+	DashboardHost  string           `yaml:"dashboard_host"`
+	DashboardPort  int              `yaml:"dashboard_port"`
+}
+
+type DashboardConfig struct {
+	Enable bool   `yaml:"enable"`
+	LAddr  string `yaml:"laddr"`
 }
 
 type PrometheusConfig struct {
+	Enable        bool   `yaml:"enable"`
+	LAddr         string `yaml:"laddr"`
 	MetricsPrefix string `yaml:"metrics_prefix"`
+	Host          string `yaml:"host"`
 	Port          int    `yaml:"port"`
 }
 
@@ -196,11 +207,41 @@ func Load(path string) (*Config, error) {
 	if cfg.Advanced.WSTimeout == "" {
 		cfg.Advanced.WSTimeout = "30s"
 	}
-	if cfg.Advanced.DashboardPort == 0 {
-		cfg.Advanced.DashboardPort = 8888
+	if cfg.Advanced.Dashboard.LAddr == "" {
+		legacyHost := strings.TrimSpace(cfg.Advanced.DashboardHost)
+		legacyPort := cfg.Advanced.DashboardPort
+		if legacyHost != "" || legacyPort != 0 {
+			if legacyHost == "" {
+				legacyHost = "127.0.0.1"
+			}
+			if legacyPort == 0 {
+				legacyPort = 8888
+			}
+			cfg.Advanced.Dashboard.LAddr = fmt.Sprintf("tcp://%s:%d", legacyHost, legacyPort)
+			if !cfg.Advanced.Dashboard.Enable && legacyPort > 0 {
+				cfg.Advanced.Dashboard.Enable = true
+			}
+		} else {
+			cfg.Advanced.Dashboard.LAddr = "tcp://127.0.0.1:8888"
+		}
 	}
-	if cfg.Advanced.Prometheus.Port == 0 {
-		cfg.Advanced.Prometheus.Port = 9999
+	if cfg.Advanced.Prometheus.LAddr == "" {
+		legacyHost := strings.TrimSpace(cfg.Advanced.Prometheus.Host)
+		legacyPort := cfg.Advanced.Prometheus.Port
+		if legacyHost != "" || legacyPort != 0 {
+			if legacyHost == "" {
+				legacyHost = "127.0.0.1"
+			}
+			if legacyPort == 0 {
+				legacyPort = 9999
+			}
+			cfg.Advanced.Prometheus.LAddr = fmt.Sprintf("tcp://%s:%d", legacyHost, legacyPort)
+			if !cfg.Advanced.Prometheus.Enable && legacyPort > 0 {
+				cfg.Advanced.Prometheus.Enable = true
+			}
+		} else {
+			cfg.Advanced.Prometheus.LAddr = "tcp://127.0.0.1:9999"
+		}
 	}
 	if cfg.Advanced.Prometheus.MetricsPrefix == "" {
 		cfg.Advanced.Prometheus.MetricsPrefix = "pharos"
