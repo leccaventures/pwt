@@ -67,8 +67,8 @@ Defaults:
 
 ### Run
 ```sh
-git clone https://github.com/leccaventures/pharos-watchtower.git
-cd pharos-watchtower
+git clone https://github.com/leccaventures/pwt.git
+cd pwt
 cp config.example.yml config.yml
 
 docker compose up -d --build
