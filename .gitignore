@@ -15,3 +15,7 @@ data/
 # Sisyphus working directory
 .sisyphus/
 .DS_Store
+
+# ignore editor
+.vscode
+.idea
