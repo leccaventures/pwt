@@ -1,7 +1,7 @@
 # Metrics Reference
 
-Metrics are exposed on the Prometheus endpoint (`/metrics`) on the **Prometheus port** (`advanced.prometheus.port`).
-If the Prometheus port matches the dashboard port, the endpoint is served from the same server.
+Metrics are exposed on the Prometheus endpoint (`/metrics`) on the **Prometheus listen address** (`advanced.prometheus.laddr`) when `advanced.prometheus.enable` is `true`.
+If the Prometheus listen address matches the dashboard listen address, the endpoint is served from the same server.
 
 The metric prefix is configurable via `advanced.prometheus.metrics_prefix` (default: `pharos`).
 
