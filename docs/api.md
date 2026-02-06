@@ -1,6 +1,6 @@
 # API Reference
 
-All API and WebSocket endpoints are served from the **dashboard port** (`advanced.dashboard_port`).
+All API and WebSocket endpoints are served from the **dashboard listen address** (`advanced.dashboard.laddr`) when `advanced.dashboard.enable` is `true`.
 
 ## HTTP API
 

@@ -5,7 +5,10 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -130,10 +133,56 @@ func (s *Server) Log(format string, v ...interface{}) {
 }
 
 func (s *Server) Start(ctx context.Context) {
-	if s.cfg.Advanced.DashboardPort > 0 {
+	dashboardEnabled := s.cfg.Advanced.Dashboard.Enable
+	prometheusEnabled := s.cfg.Advanced.Prometheus.Enable
+
+	var dashboardAddr string
+	if dashboardEnabled {
+		addr, err := normalizeListenAddr(s.cfg.Advanced.Dashboard.LAddr)
+		if err != nil {
+			s.log("SYS", "Invalid dashboard laddr %q: %v", s.cfg.Advanced.Dashboard.LAddr, err)
+			dashboardEnabled = false
+		} else {
+			dashboardAddr = addr
+		}
+	}
+
+	var prometheusAddr string
+	if prometheusEnabled {
+		addr, err := normalizeListenAddr(s.cfg.Advanced.Prometheus.LAddr)
+		if err != nil {
+			s.log("SYS", "Invalid prometheus laddr %q: %v", s.cfg.Advanced.Prometheus.LAddr, err)
+			prometheusEnabled = false
+		} else {
+			prometheusAddr = addr
+		}
+	}
+
+	serveMetricsOnDashboard := prometheusEnabled && dashboardEnabled && prometheusAddr != "" && prometheusAddr == dashboardAddr
+	publicIPv4 := ""
+	if needsPublicIPv4(dashboardEnabled, dashboardAddr, prometheusEnabled, prometheusAddr) {
+		ctxLookup, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ip, err := fetchPublicIPv4(ctxLookup)
+		cancel()
+		if err != nil {
+			s.log("SYS", "Public IPv4 lookup failed: %v", err)
+		} else {
+			publicIPv4 = ip
+		}
+	}
+
+	if dashboardEnabled {
+		if url, err := accessURL(dashboardAddr, "/", publicIPv4); err == nil {
+			s.log("SYS", "Dashboard URL: %s", url)
+		}
+		if serveMetricsOnDashboard {
+			if url, err := accessURL(dashboardAddr, "/metrics", publicIPv4); err == nil {
+				s.log("SYS", "Metrics URL: %s", url)
+			}
+		}
 		go s.handleMessages()
 		go s.handleLogs() // Start log handler
-		go s.runServer(ctx, s.cfg.Advanced.DashboardPort, func(mux *http.ServeMux) {
+		go s.runServer(ctx, dashboardAddr, func(mux *http.ServeMux) {
 			mux.HandleFunc("/api/state", s.handleState)
 			mux.HandleFunc("/api/validators", s.handleValidators)
 			mux.HandleFunc("/api/validators/windows", s.handleValidatorWindows)
@@ -150,7 +199,7 @@ func (s *Server) Start(ctx context.Context) {
 				w.Write(content)
 			})
 
-			if s.cfg.Advanced.Prometheus.Port > 0 && s.cfg.Advanced.Prometheus.Port == s.cfg.Advanced.DashboardPort {
+			if serveMetricsOnDashboard {
 				mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 					if s.exporter != nil {
 						s.exporter.UpdateNow()
@@ -161,8 +210,11 @@ func (s *Server) Start(ctx context.Context) {
 		})
 	}
 
-	if s.cfg.Advanced.Prometheus.Port > 0 && s.cfg.Advanced.Prometheus.Port != s.cfg.Advanced.DashboardPort {
-		go s.runServer(ctx, s.cfg.Advanced.Prometheus.Port, func(mux *http.ServeMux) {
+	if prometheusEnabled && !serveMetricsOnDashboard {
+		if url, err := accessURL(prometheusAddr, "/metrics", publicIPv4); err == nil {
+			s.log("SYS", "Metrics URL: %s", url)
+		}
+		go s.runServer(ctx, prometheusAddr, func(mux *http.ServeMux) {
 			mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 				if s.exporter != nil {
 					s.exporter.UpdateNow()
@@ -173,11 +225,9 @@ func (s *Server) Start(ctx context.Context) {
 	}
 }
 
-func (s *Server) runServer(ctx context.Context, port int, setup func(*http.ServeMux)) {
+func (s *Server) runServer(ctx context.Context, addr string, setup func(*http.ServeMux)) {
 	mux := http.NewServeMux()
 	setup(mux)
-
-	addr := fmt.Sprintf(":%d", port)
 	server := &http.Server{
 		Addr:    addr,
 		Handler: mux,
@@ -194,6 +244,97 @@ func (s *Server) runServer(ctx context.Context, port int, setup func(*http.Serve
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
 		s.log("SYS", "HTTP server failed on %s: %v", addr, err)
 	}
+}
+
+func normalizeListenAddr(laddr string) (string, error) {
+	laddr = strings.TrimSpace(laddr)
+	if laddr == "" {
+		return "", fmt.Errorf("empty laddr")
+	}
+	if strings.Contains(laddr, "://") {
+		parsed, err := url.Parse(laddr)
+		if err != nil {
+			return "", fmt.Errorf("invalid laddr %q: %w", laddr, err)
+		}
+		if parsed.Host == "" {
+			return "", fmt.Errorf("invalid laddr %q: missing host", laddr)
+		}
+		laddr = parsed.Host
+	}
+	if _, _, err := net.SplitHostPort(laddr); err != nil {
+		return "", fmt.Errorf("invalid laddr %q: %w", laddr, err)
+	}
+	return laddr, nil
+}
+
+func needsPublicIPv4(dashEnabled bool, dashAddr string, promEnabled bool, promAddr string) bool {
+	if dashEnabled && hostIsAny(dashAddr) {
+		return true
+	}
+	if promEnabled && hostIsAny(promAddr) {
+		return true
+	}
+	return false
+}
+
+func hostIsAny(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	return host == "0.0.0.0"
+}
+
+func accessURL(addr, path, publicIPv4 string) (string, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", err
+	}
+	if host == "0.0.0.0" && publicIPv4 != "" {
+		host = publicIPv4
+	}
+	if strings.Contains(host, ":") {
+		host = fmt.Sprintf("[%s]", host)
+	}
+	if path == "" {
+		path = "/"
+	}
+	return fmt.Sprintf("http://%s:%s%s", host, port, path), nil
+}
+
+func fetchPublicIPv4(ctx context.Context) (string, error) {
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialer := &net.Dialer{Timeout: 2 * time.Second}
+			return dialer.DialContext(ctx, "tcp4", addr)
+		},
+	}
+	client := &http.Client{
+		Timeout:   2 * time.Second,
+		Transport: transport,
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.ipify.org", nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return "", fmt.Errorf("status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	ip := strings.TrimSpace(string(body))
+	parsed := net.ParseIP(ip)
+	if parsed == nil || strings.Contains(ip, ":") {
+		return "", fmt.Errorf("invalid IPv4 response %q", ip)
+	}
+	return ip, nil
 }
 
 // Internal helper for server logs
@@ -289,7 +430,7 @@ func (s *Server) handleLogs() {
 
 // BroadcastUpdate triggers a push of the current state to all connected clients
 func (s *Server) BroadcastUpdate() {
-	if s.cfg.Advanced.DashboardPort == 0 {
+	if !s.cfg.Advanced.Dashboard.Enable {
 		return
 	}
 
