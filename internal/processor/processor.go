@@ -381,13 +381,10 @@ func (p *Processor) processBlock(ctx context.Context, header *types.Header) {
 }
 
 func (p *Processor) logProofFetchError(height, nodeHeight uint64, err error) {
-	errMsg := err.Error()
-	if strings.Contains(errMsg, "block is not available") {
-		logger.Warn("PROC", "Failed to fetch proof for block %d (0x%x): block proof not yet available (node height: %d)",
-			height, height, nodeHeight)
+	if strings.Contains(err.Error(), "block is not available") {
+		logger.Warn("PROC", "Block proof not yet available (height: %d)", height)
 	} else {
-		logger.Error("PROC", "Failed to fetch proof for block %d (0x%x): %v (node height: %d)",
-			height, height, err, nodeHeight)
+		logger.Error("PROC", "Block proof not available (height: %d)", height)
 	}
 }
 
