@@ -61,7 +61,7 @@ func (l *Listener) subscribeNode(ctx context.Context, node *rpc.Node) {
 
 		client, err := ethclient.DialContext(ctx, node.Config.WS)
 		if err != nil {
-			logger.Warn("WS", "Connection failed to %s: %v. Retrying in %v", node.Config.Label, err, backoff)
+			logger.Warn("WS", "Connection failed to %s: %s. Retrying in %v", node.Config.Label, rpc.SanitizeForLog(err), backoff)
 			time.Sleep(backoff)
 			if backoff < 60*time.Second {
 				backoff *= 2
@@ -73,7 +73,7 @@ func (l *Listener) subscribeNode(ctx context.Context, node *rpc.Node) {
 		sub, err := client.SubscribeNewHead(ctx, headers)
 		if err != nil {
 			client.Close()
-			logger.Warn("WS", "Subscribe failed for %s: %v", node.Config.Label, err)
+			logger.Warn("WS", "Subscribe failed for %s: %s", node.Config.Label, rpc.SanitizeForLog(err))
 			time.Sleep(backoff)
 			continue
 		}

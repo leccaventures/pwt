@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -14,19 +15,25 @@ import (
 	"lecca.io/pharos-watchtower/internal/logger"
 )
 
-func sanitizeRPCError(err error) string {
+// ipv4WithOptionalPort matches IPv4 and optional :port (e.g. 135.181.229.187:18200).
+var ipv4WithOptionalPort = regexp.MustCompile(`[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(?::[0-9]+)?`)
+
+const ipRedacted = "[redacted]"
+
+// SanitizeForLog returns a log-safe error message (IPs redacted via regex).
+func SanitizeForLog(err error) string {
 	if err == nil {
 		return ""
 	}
 	msg := err.Error()
 	if strings.Contains(msg, "<html") || strings.Contains(msg, "<HTML") {
-		// Keep the status line before HTML payload, if present
 		if idx := strings.Index(strings.ToLower(msg), "<html"); idx > 0 {
-			return strings.TrimSpace(msg[:idx])
+			msg = strings.TrimSpace(msg[:idx])
+		} else {
+			return "HTTP error response"
 		}
-		return "HTTP error response"
 	}
-	return msg
+	return ipv4WithOptionalPort.ReplaceAllString(msg, ipRedacted)
 }
 
 type NodeStatus struct {
@@ -120,7 +127,7 @@ func (m *Manager) checkNode(ctx context.Context, n *Node) {
 	if n.RawRPC == nil {
 		raw, err := rpc.Dial(n.Config.RPC)
 		if err != nil {
-			logger.Warn("NODE", "%s connection failed: %s", n.Config.Label,  sanitizeRPCError(err))
+			logger.Warn("NODE", "%s connection failed: %s", n.Config.Label, SanitizeForLog(err))
 			n.Status.Healthy = false
 			n.Status.LastError = err
 			n.Status.LastCheck = time.Now()
@@ -135,7 +142,7 @@ func (m *Manager) checkNode(ctx context.Context, n *Node) {
 
 	_, err := n.RPC.BlockNumber(ctxWithTimeout)
 	if err != nil {
-		logger.Warn("NODE", "%s check failed: %s", n.Config.Label,  sanitizeRPCError(err))
+		logger.Warn("NODE", "%s check failed: %s", n.Config.Label, SanitizeForLog(err))
 		n.Status.Healthy = false
 		n.Status.LastError = err
 		n.Status.LastCheck = time.Now()

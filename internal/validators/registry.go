@@ -127,6 +127,9 @@ func (r *Registry) Reload(ctx context.Context) error {
 		}
 	}
 
+	// Contract is source of truth: track which keys we get from contract this reload
+	contractNormKeys := make(map[string]bool)
+
 	// Process each validator
 	for _, validatorID := range validatorIDs {
 		validatorInfo, err := contractService.GetValidatorInfo(ctx, validatorID)
@@ -142,6 +145,8 @@ func (r *Registry) Reload(ctx context.Context) error {
 		if r.cfg.Mode == "selected" && !selectedKeys[normKey] {
 			continue
 		}
+
+		contractNormKeys[normKey] = true
 
 		state, exists := r.validators[normKey]
 		if !exists {
@@ -165,6 +170,13 @@ func (r *Registry) Reload(ctx context.Context) error {
 			Status:      validatorInfo.Status,
 			Endpoint:    validatorInfo.Endpoint,
 			Owner:       validatorInfo.Owner,
+		}
+	}
+
+	// Overwrite with contract as source of truth: remove validators no longer in contract
+	for key := range r.validators {
+		if !contractNormKeys[key] {
+			delete(r.validators, key)
 		}
 	}
 

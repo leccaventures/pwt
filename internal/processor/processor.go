@@ -43,7 +43,17 @@ type Processor struct {
 	nextNode    uint64
 }
 
-const blockTimeCacheSize = 200
+const (
+	blockTimeCacheSize    = 200
+	maxNodeCatchUpWait    = 10 * time.Second
+	nodeCatchUpInterval  = 500 * time.Millisecond
+	blockFetchMaxAttempts = 4
+	blockFetchRetryDelay   = 1 * time.Second // block fetch failed, retry before delay
+	proofFetchMaxRetries  = 10
+	proofInitialDelay     = 200 * time.Millisecond
+	proofMaxDelay         = 3 * time.Second
+	minBlocksForDownAlert = 10
+)
 
 func NewProcessor(cfg config.ChainConfig, advanced config.AdvancedConfig, nodeMgr *rpc.Manager, registry *validators.Registry, blockCh <-chan *types.Header, broadcaster StateBroadcaster, exporter *metrics.Exporter) *Processor {
 	return &Processor{
@@ -86,6 +96,227 @@ func (p *Processor) selectProofNode() *rpc.Node {
 	return healthy[int((idx-1)%uint64(len(healthy)))]
 }
 
+// resolveBlockHeight returns block height from header; if height is 0, resolves via HeaderByHash.
+func (p *Processor) resolveBlockHeight(ctx context.Context, header *types.Header) uint64 {
+	height := uint64(0)
+	if header.Number != nil {
+		height = header.Number.Uint64()
+	}
+	if height != 0 {
+		return height
+	}
+	node := p.nodeMgr.GetBestNode()
+	if node == nil || node.RPC == nil {
+		return 0
+	}
+	resolvedHeader, err := node.RPC.HeaderByHash(ctx, header.Hash())
+	if err != nil {
+		logger.Warn("PROC", "Block header height missing; hash=%s: %v", header.Hash().Hex(), err)
+		return 0
+	}
+	if resolvedHeader != nil && resolvedHeader.Number != nil {
+		height = resolvedHeader.Number.Uint64()
+	}
+	return height
+}
+
+// ensureProofNode selects a proof node, ensures RawRPC is set, and waits for node to have the block. Returns (node, nodeHeight, true) or (nil, 0, false).
+func (p *Processor) ensureProofNode(ctx context.Context, height uint64) (node *rpc.Node, nodeHeight uint64, ok bool) {
+	node = p.selectProofNode()
+	if node == nil {
+		logger.Warn("PROC", "No healthy node to fetch proof for block %d", height)
+		return nil, 0, false
+	}
+	if node.RawRPC == nil {
+		fallback := p.nodeMgr.GetBestNode()
+		if fallback != nil {
+			node = fallback
+		}
+	}
+	if node.RawRPC == nil {
+		logger.Warn("PROC", "Node RPC client not initialized for block %d, skipping", height)
+		return nil, 0, false
+	}
+	nodeHeight = node.GetBlockHeight()
+	if height <= nodeHeight {
+		return node, nodeHeight, true
+	}
+	waited := time.Duration(0)
+	for height > nodeHeight && waited < maxNodeCatchUpWait {
+		time.Sleep(nodeCatchUpInterval)
+		waited += nodeCatchUpInterval
+		nodeHeight = node.GetBlockHeight()
+	}
+	if height <= nodeHeight {
+		return node, nodeHeight, true
+	}
+	fallback := p.nodeMgr.GetBestNode()
+	if fallback == nil || fallback == node {
+		return node, nodeHeight, true
+	}
+	logger.Debug("PROC", "Assigned node %s behind for block %d (height=%d); falling back to %s", node.Config.Label, height, nodeHeight, fallback.Config.Label)
+	node = fallback
+	if node.RawRPC == nil {
+		logger.Warn("PROC", "Node RPC client not initialized for block %d, skipping", height)
+		return nil, 0, false
+	}
+	nodeHeight = node.GetBlockHeight()
+	return node, nodeHeight, true
+}
+
+// getBlockTimeAndUpdateMetrics returns block time for height (from cache or RPC) and updates exporter metrics. currentTs may be 0.
+func (p *Processor) getBlockTimeAndUpdateMetrics(ctx context.Context, node *rpc.Node, height, nodeHeight uint64) (blockTime time.Time, currentTs uint64) {
+	canFetchBlockTime := node != nil && node.RPC != nil && height > 0 && height <= nodeHeight
+	if !canFetchBlockTime {
+		return time.Time{}, 0
+	}
+	p.cacheMu.RLock()
+	currentTs, okCurrent := p.blockTime[height]
+	p.cacheMu.RUnlock()
+	if !okCurrent {
+		currentTs = p.fetchAndCacheBlockTime(ctx, node, height)
+	}
+	if currentTs > 0 {
+		blockTime = time.Unix(int64(currentTs), 0)
+	}
+	if p.exporter != nil && currentTs > 0 {
+		p.updateExporterBlockMetrics(ctx, node, height, currentTs)
+	}
+	return blockTime, currentTs
+}
+
+func (p *Processor) fetchAndCacheBlockTime(ctx context.Context, node *rpc.Node, height uint64) uint64 {
+	var currentTs uint64
+	var lastErr error
+	for attempt := 0; attempt < blockFetchMaxAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(blockFetchRetryDelay)
+		}
+		block, err := node.RPC.BlockByNumber(ctx, new(big.Int).SetUint64(height))
+		if err == nil && block != nil {
+			currentTs = block.Time()
+			break
+		}
+		lastErr = err
+		// "block is not available"(geth) / "not found" (etc node) → retry, block not synchronized
+		if err != nil && !strings.Contains(err.Error(), "block is not available") && !strings.Contains(err.Error(), "not found") {
+			break
+		}
+	}
+	if currentTs == 0 && lastErr != nil {
+		logger.Warn("PROC", "Failed to fetch block for timestamp (height=%d): %v", height, lastErr)
+	}
+	if currentTs == 0 {
+		return 0
+	}
+	p.cacheMu.Lock()
+	p.blockTime[height] = currentTs
+	if p.cacheMin == 0 || height < p.cacheMin {
+		p.cacheMin = height
+	}
+	for len(p.blockTime) > blockTimeCacheSize {
+		delete(p.blockTime, p.cacheMin)
+		p.cacheMin++
+	}
+	p.cacheMu.Unlock()
+	return currentTs
+}
+
+func (p *Processor) updateExporterBlockMetrics(ctx context.Context, node *rpc.Node, height, currentTs uint64) {
+	if height > 1 {
+		prevTs := p.getCachedBlockTime(ctx, node, height-1)
+		if prevTs > 0 && currentTs > 0 {
+			p.exporter.SetLastBlockIntervalSeconds(float64(currentTs - prevTs))
+		}
+	}
+	if height > 100 {
+		avgTs := p.getCachedBlockTime(ctx, node, height-100)
+		if avgTs > 0 && currentTs > 0 {
+			p.exporter.SetAvgBlockTime100Seconds(float64(currentTs-avgTs) / 100.0)
+		}
+	}
+}
+
+// fetchBlockProofWithRetry fetches block proof with exponential backoff. First attempt is immediate.
+func (p *Processor) fetchBlockProofWithRetry(ctx context.Context, node *rpc.Node, height uint64) (BlockProofResponse, error) {
+	var proof BlockProofResponse
+	err := node.RawRPC.CallContext(ctx, &proof, "debug_getBlockProof", fmt.Sprintf("0x%x", height))
+	if err == nil {
+		if p.broadcaster != nil {
+			logger.Info("PROC", "Block #%d | Proof Fetched via %s", height, node.Config.Label)
+		}
+		return proof, nil
+	}
+	for i := 0; i < proofFetchMaxRetries; i++ {
+		delay := proofInitialDelay
+		if i > 0 {
+			delay = time.Duration(1<<uint(i)) * proofInitialDelay
+			if delay > proofMaxDelay {
+				delay = proofMaxDelay
+			}
+		}
+		time.Sleep(delay)
+		if node.RawRPC == nil {
+			if p.broadcaster != nil {
+				logger.Warn("PROC", "Connection lost during retry for block %d", height)
+			}
+			return BlockProofResponse{}, err
+		}
+		err = node.RawRPC.CallContext(ctx, &proof, "debug_getBlockProof", fmt.Sprintf("0x%x", height))
+		if err == nil {
+			if p.broadcaster != nil {
+				logger.Info("PROC", "Block #%d | Proof Fetched (Retried %d times) via %s", height, i+1, node.Config.Label)
+			}
+			return proof, nil
+		}
+	}
+	return BlockProofResponse{}, err
+}
+
+func buildSignedSet(proof BlockProofResponse) map[string]bool {
+	signedSet := make(map[string]bool)
+	for _, k := range proof.SignedBlsKeys {
+		signedSet[validators.NormalizeBlsKey(k)] = true
+	}
+	return signedSet
+}
+
+// updateValidatorsFromProof updates each validator's window and down state; returns descriptions of validators who missed the block.
+func (p *Processor) updateValidatorsFromProof(height uint64, blockTime time.Time, signedSet map[string]bool) []string {
+	allValidators := p.registry.GetValidators()
+	var missedValidators []string
+	for _, val := range allValidators {
+		participated := signedSet[val.Meta.BlsKeyHex]
+		val.Window.Add(participated, blockTime, height)
+		val.Mu.Lock()
+		if participated {
+			if height > val.LastHeight {
+				val.LastHeight = height
+				val.LastSeenAt = time.Now()
+			}
+			if val.Down {
+				val.Down = false
+				if p.broadcaster != nil {
+					logger.Info("STATE", "Validator '%s' status changed: DOWN -> UP", val.Meta.Description)
+				}
+			}
+		} else {
+			missedValidators = append(missedValidators, val.Meta.Description)
+			missed, total, _ := val.Window.GetStats()
+			if total >= minBlocksForDownAlert && missed == total {
+				if !val.Down {
+					val.Down = true
+					if p.broadcaster != nil {
+						logger.Error("STATE", "Validator '%s' status changed: UP -> DOWN (100%% Missed in Window)", val.Meta.Description)
+					}
+				}
+			}
+		}
+		val.Mu.Unlock()
+	}
+	return missedValidators
+}
+
 func (p *Processor) Start(ctx context.Context) {
 	var wg sync.WaitGroup
 
@@ -110,252 +341,34 @@ func (p *Processor) Start(ctx context.Context) {
 }
 
 func (p *Processor) processBlock(ctx context.Context, header *types.Header) {
-	var height uint64
-	if header.Number != nil {
-		height = header.Number.Uint64()
-	}
-	if height == 0 {
-		if node := p.nodeMgr.GetBestNode(); node != nil && node.RPC != nil {
-			resolvedHeader, err := node.RPC.HeaderByHash(ctx, header.Hash())
-			if err != nil {
-				logger.Warn("PROC", "Block header height missing; hash=%s: %v", header.Hash().Hex(), err)
-			} else if resolvedHeader != nil && resolvedHeader.Number != nil {
-				height = resolvedHeader.Number.Uint64()
-			}
-		}
-	}
-	var blockTime time.Time
+	height := p.resolveBlockHeight(ctx, header)
 
-	// Broadcast update immediately when we start processing a block
-	// This ensures node height (updated by WS listener) is reflected immediately
 	if p.broadcaster != nil {
 		p.broadcaster.BroadcastUpdate()
 	}
 
-	node := p.selectProofNode()
-	if node == nil {
-		logger.Warn("PROC", "No healthy node to fetch proof for block %d", height)
+	node, nodeHeight, ok := p.ensureProofNode(ctx, height)
+	if !ok || node == nil {
 		return
 	}
 
-	// Check if RawRPC is initialized (it can be nil even if node is not nil)
-	// This can happen if the node became unhealthy between selection and here
-	if node.RawRPC == nil {
-		fallback := p.nodeMgr.GetBestNode()
-		if fallback != nil {
-			node = fallback
-		}
-	}
-	if node.RawRPC == nil {
-		logger.Warn("PROC", "Node RPC client not initialized for block %d, skipping", height)
-		return
-	}
-
-	// Check if node has processed this block yet
-	nodeHeight := node.GetBlockHeight()
-
-	// If the block is newer than what the node has, wait a bit more
-	if height > nodeHeight {
-		// Wait for node to catch up (with timeout)
-		maxWait := 10 * time.Second
-		waitInterval := 500 * time.Millisecond
-		waited := time.Duration(0)
-		for height > nodeHeight && waited < maxWait {
-			time.Sleep(waitInterval)
-			waited += waitInterval
-			nodeHeight = node.GetBlockHeight()
-		}
-	}
-	if height > nodeHeight {
-		fallback := p.nodeMgr.GetBestNode()
-		if fallback != nil && fallback != node {
-			logger.Debug("PROC", "Assigned node %s behind for block %d (height=%d); falling back to %s", node.Config.Label, height, nodeHeight, fallback.Config.Label)
-			node = fallback
-			if node.RawRPC == nil {
-				logger.Warn("PROC", "Node RPC client not initialized for block %d, skipping", height)
-				return
-			}
-			nodeHeight = node.GetBlockHeight()
-		}
-	}
-
-	if node != nil && node.RPC != nil && height > 0 && height <= nodeHeight {
-		var currentTs uint64
-		p.cacheMu.RLock()
-		currentTs, okCurrent := p.blockTime[height]
-		p.cacheMu.RUnlock()
-		if !okCurrent {
-			var block *types.Block
-			var err error
-			// Retry: node may return "block is not available" briefly after newHeads (block not yet in BlockByNumber).
-			for attempt := 0; attempt < 4; attempt++ {
-				if attempt > 0 {
-					time.Sleep(200 * time.Millisecond)
-				}
-				ctxWithTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
-				block, err = node.RPC.BlockByNumber(ctxWithTimeout, new(big.Int).SetUint64(height))
-				cancel()
-				if err == nil && block != nil {
-					break
-				}
-				if err != nil && !strings.Contains(err.Error(), "block is not available") {
-					break
-				}
-			}
-			if err != nil {
-				logger.Warn("PROC", "Failed to fetch block for timestamp (height=%d): %v", height, err)
-			} else if block != nil {
-				currentTs = block.Time()
-				p.cacheMu.Lock()
-				p.blockTime[height] = currentTs
-				if p.cacheMin == 0 || height < p.cacheMin {
-					p.cacheMin = height
-				}
-				for len(p.blockTime) > blockTimeCacheSize {
-					delete(p.blockTime, p.cacheMin)
-					p.cacheMin++
-				}
-				p.cacheMu.Unlock()
-			}
-		}
-		if currentTs > 0 {
-			blockTime = time.Unix(int64(currentTs), 0)
-		}
-
-		if p.exporter != nil {
-			prevHeight := height - 1
-			if height > 1 {
-				prevTs := p.getCachedBlockTime(ctx, node, prevHeight)
-				if prevTs > 0 && currentTs > 0 {
-					intervalSec := float64(currentTs - prevTs)
-					p.exporter.SetLastBlockIntervalSeconds(intervalSec)
-				}
-			}
-
-			avgHeight := height - 100
-			if height > 100 {
-				avgTs := p.getCachedBlockTime(ctx, node, avgHeight)
-				if avgTs > 0 && currentTs > 0 {
-					avgSec := float64(currentTs-avgTs) / 100.0
-					p.exporter.SetAvgBlockTime100Seconds(avgSec)
-				}
-			}
-		}
-	}
+	blockTime, _ := p.getBlockTimeAndUpdateMetrics(ctx, node, height, nodeHeight)
 	if blockTime.IsZero() {
 		blockTime = time.Now()
 	}
 
-	var proof BlockProofResponse
-	var err error
-
-	// Retry loop for fetching block proof with exponential backoff
-	// The proof might not be available immediately after the block header is received
-	// First attempt immediately, then retry with backoff
-	maxRetries := 10                       // Reduced from 15, but with smarter retry logic
-	initialDelay := 200 * time.Millisecond // Reduced initial delay
-	maxDelay := 3 * time.Second            // Reduced max delay
-
-	// First attempt immediately (no delay)
-	err = node.RawRPC.CallContext(ctx, &proof, "debug_getBlockProof", fmt.Sprintf("0x%x", height))
-	if err == nil {
-		if p.broadcaster != nil {
-			logger.Info("PROC", "Block #%d | Proof Fetched via %s", height, node.Config.Label)
-		}
-	} else {
-		// Retry with exponential backoff
-		for i := 0; i < maxRetries; i++ {
-			// Exponential backoff: 0.2s, 0.4s, 0.8s, 1.6s, 3s, 3s, ...
-			delay := initialDelay
-			if i > 0 {
-				delay = time.Duration(1<<uint(i)) * initialDelay
-				if delay > maxDelay {
-					delay = maxDelay
-				}
-			}
-
-			time.Sleep(delay)
-
-			// Re-check RawRPC before retry (it might have become nil)
-			if node.RawRPC == nil {
-				if p.broadcaster != nil {
-					logger.Warn("PROC", "Connection lost during retry for block %d", height)
-				}
-				return
-			}
-
-			err = node.RawRPC.CallContext(ctx, &proof, "debug_getBlockProof", fmt.Sprintf("0x%x", height))
-			if err == nil {
-				if p.broadcaster != nil {
-					logger.Info("PROC", "Block #%d | Proof Fetched (Retried %d times) via %s", height, i+1, node.Config.Label)
-				}
-				break
-			}
-		}
-	}
-
+	proof, err := p.fetchBlockProofWithRetry(ctx, node, height)
 	if err != nil {
-		// More detailed error logging
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "block is not available") {
-			logger.Warn("PROC", "Failed to fetch proof for block %d (0x%x): block proof not yet available (node height: %d)",
-				height, height, nodeHeight)
-		} else {
-			logger.Error("PROC", "Failed to fetch proof for block %d (0x%x): %v (node height: %d)",
-				height, height, err, nodeHeight)
-		}
+		p.logProofFetchError(height, nodeHeight, err)
 		return
 	}
 
-	signedSet := make(map[string]bool)
-	for _, k := range proof.SignedBlsKeys {
-		// Use the same normalization function as registry
-		normalizedKey := validators.NormalizeBlsKey(k)
-		signedSet[normalizedKey] = true
-	}
-
-	allValidators := p.registry.GetValidators()
-	var missedValidators []string
-
-	for _, val := range allValidators {
-		participated := signedSet[val.Meta.BlsKeyHex]
-
-		val.Window.Add(participated, blockTime, height)
-
-		val.Mu.Lock()
-		if participated {
-			// Only update LastHeight if this block is higher than the current one
-			// This prevents LastHeight from decreasing due to out-of-order async processing
-			if height > val.LastHeight {
-				val.LastHeight = height
-				val.LastSeenAt = time.Now()
-			}
-			if val.Down {
-				val.Down = false
-				if p.broadcaster != nil {
-					logger.Info("STATE", "Validator '%s' status changed: DOWN -> UP", val.Meta.Description)
-				}
-			}
-		} else {
-			missedValidators = append(missedValidators, val.Meta.Description)
-
-			missed, total, _ := val.Window.GetStats()
-			// Alert if 100% missed in window and window has enough blocks
-			// We use a heuristic: at least 10 blocks to avoid false positives on start
-			if total >= 10 && missed == total {
-				if !val.Down {
-					val.Down = true
-					if p.broadcaster != nil {
-						logger.Error("STATE", "Validator '%s' status changed: UP -> DOWN (100%% Missed in Window)", val.Meta.Description)
-					}
-				}
-			}
-		}
-		val.Mu.Unlock()
-	}
+	signedSet := buildSignedSet(proof)
+	missedValidators := p.updateValidatorsFromProof(height, blockTime, signedSet)
 
 	if p.broadcaster != nil {
 		if len(missedValidators) > 0 {
+			allValidators := p.registry.GetValidators()
 			logger.Warn("MISS", "Block #%d Missed by %d/%d validators: %s",
 				height, len(missedValidators), len(allValidators), strings.Join(missedValidators, ", "))
 		}
@@ -365,7 +378,14 @@ func (p *Processor) processBlock(ctx context.Context, header *types.Header) {
 	if p.exporter != nil {
 		p.exporter.Update()
 	}
+}
 
+func (p *Processor) logProofFetchError(height, nodeHeight uint64, err error) {
+	if strings.Contains(err.Error(), "block is not available") {
+		logger.Warn("PROC", "Block proof not yet available (height: %d)", height)
+	} else {
+		logger.Error("PROC", "Block proof not available (height: %d)", height)
+	}
 }
 
 func (p *Processor) getCachedBlockTime(ctx context.Context, node *rpc.Node, height uint64) uint64 {
@@ -380,23 +400,36 @@ func (p *Processor) getCachedBlockTime(ctx context.Context, node *rpc.Node, heig
 	}
 	p.cacheMu.RUnlock()
 
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
-	block, err := node.RPC.BlockByNumber(ctxWithTimeout, new(big.Int).SetUint64(height))
-	cancel()
-	if err != nil {
-		// "block is not available" often means pruned block (e.g. height-100) or node lag; log at Debug to reduce noise.
-		if strings.Contains(err.Error(), "block is not available") {
-			logger.Debug("PROC", "Block not available for timestamp (height=%d): %v", height, err)
-		} else {
-			logger.Warn("PROC", "Failed to fetch block for timestamp (height=%d): %v", height, err)
+	var blockTime uint64
+	for attempt := 0; attempt < blockFetchMaxAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(blockFetchRetryDelay)
 		}
-		return 0
+		ctxWithTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
+		block, err := node.RPC.BlockByNumber(ctxWithTimeout, new(big.Int).SetUint64(height))
+		cancel()
+		if err == nil && block != nil {
+			blockTime = block.Time()
+			break
+		}
+		if err != nil {
+			if attempt == blockFetchMaxAttempts-1 {
+				if strings.Contains(err.Error(), "block is not available") || strings.Contains(err.Error(), "not found") {
+					logger.Debug("PROC", "Block not available for timestamp (height=%d): %v", height, err)
+				} else {
+					logger.Warn("PROC", "Failed to fetch block for timestamp (height=%d): %v", height, err)
+				}
+			}
+		}
+		// "block is not available"(geth) / "not found" (etc node) → retry, other errors return immediately
+		if err != nil && !strings.Contains(err.Error(), "block is not available") && !strings.Contains(err.Error(), "not found") {
+			return 0
+		}
 	}
-	if block == nil {
+	if blockTime == 0 {
 		return 0
 	}
 
-	blockTime := block.Time()
 	p.cacheMu.Lock()
 	p.blockTime[height] = blockTime
 	if p.cacheMin == 0 || height < p.cacheMin {
