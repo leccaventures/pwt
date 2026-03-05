@@ -1,0 +1,11 @@
+refactor(processor): split processBlock and improve block fetch retry policy
+
+- Split processBlock into single-responsibility helpers
+  - resolveBlockHeight, ensureProofNode, getBlockTimeAndUpdateMetrics
+  - fetchAndCacheBlockTime, updateExporterBlockMetrics, fetchBlockProofWithRetry
+  - buildSignedSet, updateValidatorsFromProof, logProofFetchError
+- Extract magic numbers into constants (node catch-up, block fetch, proof fetch, down alert)
+- Retry block fetch after 1s on failure (blockFetchRetryDelay)
+  - Applied to both fetchAndCacheBlockTime and getCachedBlockTime
+- Treat "not found" as retryable (same as "block is not available")
+  - Avoids early failure due to node-specific error messages
