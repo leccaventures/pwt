@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/core/types"
@@ -40,15 +40,14 @@ type Processor struct {
 	cacheMu     sync.RWMutex
 	blockTime   map[uint64]uint64
 	cacheMin    uint64
-	nextNode    uint64
 }
 
 const (
 	blockTimeCacheSize    = 200
 	maxNodeCatchUpWait    = 10 * time.Second
-	nodeCatchUpInterval  = 500 * time.Millisecond
+	nodeCatchUpInterval   = 500 * time.Millisecond
 	blockFetchMaxAttempts = 4
-	blockFetchRetryDelay   = 1 * time.Second // block fetch failed, retry before delay
+	blockFetchRetryDelay  = 500 * time.Millisecond // block fetch failed, retry before delay
 	proofFetchMaxRetries  = 10
 	proofInitialDelay     = 200 * time.Millisecond
 	proofMaxDelay         = 3 * time.Second
@@ -68,32 +67,48 @@ func NewProcessor(cfg config.ChainConfig, advanced config.AdvancedConfig, nodeMg
 	}
 }
 
-func (p *Processor) selectProofNode() *rpc.Node {
+func (p *Processor) selectProofNode(height uint64) *rpc.Node {
 	nodes := p.nodeMgr.GetNodes()
 	if len(nodes) == 0 {
 		return nil
 	}
 
-	var healthy []*rpc.Node
-	var healthySyncing []*rpc.Node
+	type candidate struct {
+		node  *rpc.Node
+		score float64
+	}
+
+	var atHeight []candidate
+	var healthy []candidate
+
 	for _, n := range nodes {
 		status := n.GetStatus()
-		if status.Healthy && !status.Syncing {
-			healthy = append(healthy, n)
-		} else if status.Healthy {
-			healthySyncing = append(healthySyncing, n)
+		if !status.Healthy || n.RawRPC == nil {
+			continue
+		}
+		score := n.GetProofScore()
+		if status.BlockHeight >= height && height > 0 {
+			atHeight = append(atHeight, candidate{node: n, score: score})
+		} else {
+			healthy = append(healthy, candidate{node: n, score: score})
 		}
 	}
 
-	if len(healthy) == 0 {
-		healthy = healthySyncing
-	}
-	if len(healthy) == 0 {
-		return nil
+	sortByScore := func(c []candidate) {
+		sort.Slice(c, func(i, j int) bool {
+			return c[i].score > c[j].score
+		})
 	}
 
-	idx := atomic.AddUint64(&p.nextNode, 1)
-	return healthy[int((idx-1)%uint64(len(healthy)))]
+	if len(atHeight) > 0 {
+		sortByScore(atHeight)
+		return atHeight[0].node
+	}
+	if len(healthy) > 0 {
+		sortByScore(healthy)
+		return healthy[0].node
+	}
+	return nil
 }
 
 // resolveBlockHeight returns block height from header; if height is 0, resolves via HeaderByHash.
@@ -122,45 +137,27 @@ func (p *Processor) resolveBlockHeight(ctx context.Context, header *types.Header
 
 // ensureProofNode selects a proof node, ensures RawRPC is set, and waits for node to have the block. Returns (node, nodeHeight, true) or (nil, 0, false).
 func (p *Processor) ensureProofNode(ctx context.Context, height uint64) (node *rpc.Node, nodeHeight uint64, ok bool) {
-	node = p.selectProofNode()
+	node = p.selectProofNode(height)
 	if node == nil {
 		logger.Warn("PROC", "No healthy node to fetch proof for block %d", height)
 		return nil, 0, false
 	}
 	if node.RawRPC == nil {
-		fallback := p.nodeMgr.GetBestNode()
-		if fallback != nil {
-			node = fallback
-		}
-	}
-	if node.RawRPC == nil {
 		logger.Warn("PROC", "Node RPC client not initialized for block %d, skipping", height)
 		return nil, 0, false
 	}
+
 	nodeHeight = node.GetBlockHeight()
 	if height <= nodeHeight {
 		return node, nodeHeight, true
 	}
+
 	waited := time.Duration(0)
 	for height > nodeHeight && waited < maxNodeCatchUpWait {
 		time.Sleep(nodeCatchUpInterval)
 		waited += nodeCatchUpInterval
 		nodeHeight = node.GetBlockHeight()
 	}
-	if height <= nodeHeight {
-		return node, nodeHeight, true
-	}
-	fallback := p.nodeMgr.GetBestNode()
-	if fallback == nil || fallback == node {
-		return node, nodeHeight, true
-	}
-	logger.Debug("PROC", "Assigned node %s behind for block %d (height=%d); falling back to %s", node.Config.Label, height, nodeHeight, fallback.Config.Label)
-	node = fallback
-	if node.RawRPC == nil {
-		logger.Warn("PROC", "Node RPC client not initialized for block %d, skipping", height)
-		return nil, 0, false
-	}
-	nodeHeight = node.GetBlockHeight()
 	return node, nodeHeight, true
 }
 
@@ -222,6 +219,67 @@ func (p *Processor) fetchAndCacheBlockTime(ctx context.Context, node *rpc.Node, 
 	return currentTs
 }
 
+func proofRetryDelay(retry int) time.Duration {
+	delay := time.Duration(1<<uint(retry)) * proofInitialDelay
+	if delay > proofMaxDelay {
+		return proofMaxDelay
+	}
+	return delay
+}
+
+func (p *Processor) proofNodeCandidates(height uint64, primary *rpc.Node) []*rpc.Node {
+	nodes := p.nodeMgr.GetNodes()
+	if len(nodes) == 0 {
+		return nil
+	}
+
+	type scored struct {
+		node     *rpc.Node
+		score    float64
+		atHeight bool
+	}
+
+	seen := make(map[*rpc.Node]struct{}, len(nodes))
+	candidates := make([]scored, 0, len(nodes))
+
+	addNode := func(node *rpc.Node) {
+		if node == nil || node.RawRPC == nil {
+			return
+		}
+		if _, ok := seen[node]; ok {
+			return
+		}
+		status := node.GetStatus()
+		if !status.Healthy {
+			return
+		}
+		seen[node] = struct{}{}
+		candidates = append(candidates, scored{
+			node:     node,
+			score:    node.GetProofScore(),
+			atHeight: status.BlockHeight >= height && height > 0,
+		})
+	}
+
+	addNode(primary)
+	for _, node := range nodes {
+		addNode(node)
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].atHeight != candidates[j].atHeight {
+			return candidates[i].atHeight
+		}
+		return candidates[i].score > candidates[j].score
+	})
+
+	result := make([]*rpc.Node, len(candidates))
+	for i, c := range candidates {
+		result[i] = c.node
+	}
+	return result
+}
+
 func (p *Processor) updateExporterBlockMetrics(ctx context.Context, node *rpc.Node, height, currentTs uint64) {
 	if height > 1 {
 		prevTs := p.getCachedBlockTime(ctx, node, height-1)
@@ -239,38 +297,47 @@ func (p *Processor) updateExporterBlockMetrics(ctx context.Context, node *rpc.No
 
 // fetchBlockProofWithRetry fetches block proof with exponential backoff. First attempt is immediate.
 func (p *Processor) fetchBlockProofWithRetry(ctx context.Context, node *rpc.Node, height uint64) (BlockProofResponse, error) {
-	var proof BlockProofResponse
-	err := node.RawRPC.CallContext(ctx, &proof, "debug_getBlockProof", fmt.Sprintf("0x%x", height))
-	if err == nil {
-		if p.broadcaster != nil {
-			logger.Info("PROC", "Block #%d | Proof Fetched via %s", height, node.Config.Label)
+	var lastErr error
+	totalAttempts := proofFetchMaxRetries + 1
+	for attempt := 0; attempt < totalAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(proofRetryDelay(attempt - 1))
 		}
-		return proof, nil
-	}
-	for i := 0; i < proofFetchMaxRetries; i++ {
-		delay := proofInitialDelay
-		if i > 0 {
-			delay = time.Duration(1<<uint(i)) * proofInitialDelay
-			if delay > proofMaxDelay {
-				delay = proofMaxDelay
-			}
-		}
-		time.Sleep(delay)
-		if node.RawRPC == nil {
+
+		candidates := p.proofNodeCandidates(height, node)
+		if len(candidates) == 0 {
 			if p.broadcaster != nil {
-				logger.Warn("PROC", "Connection lost during retry for block %d", height)
+				logger.Warn("PROC", "No healthy proof node available for block %d", height)
 			}
-			return BlockProofResponse{}, err
+			if lastErr != nil {
+				return BlockProofResponse{}, lastErr
+			}
+			return BlockProofResponse{}, fmt.Errorf("no healthy proof node available")
 		}
-		err = node.RawRPC.CallContext(ctx, &proof, "debug_getBlockProof", fmt.Sprintf("0x%x", height))
+
+		candidate := candidates[0]
+		var proof BlockProofResponse
+		fetchStart := time.Now()
+		err := candidate.RawRPC.CallContext(ctx, &proof, "debug_getBlockProof", fmt.Sprintf("0x%x", height))
 		if err == nil {
+			candidate.RecordProofSuccess(time.Since(fetchStart))
 			if p.broadcaster != nil {
-				logger.Info("PROC", "Block #%d | Proof Fetched (Retried %d times) via %s", height, i+1, node.Config.Label)
+				if attempt == 0 {
+					logger.Info("PROC", "Block #%d | Proof Fetched via %s", height, candidate.Config.Label)
+				} else {
+					logger.Info("PROC", "Block #%d | Proof Fetched (Retried %d times) via %s", height, attempt, candidate.Config.Label)
+				}
 			}
 			return proof, nil
 		}
+
+		candidate.RecordProofFailure()
+		lastErr = err
+		if ctx.Err() != nil {
+			return BlockProofResponse{}, ctx.Err()
+		}
 	}
-	return BlockProofResponse{}, err
+	return BlockProofResponse{}, lastErr
 }
 
 func buildSignedSet(proof BlockProofResponse) map[string]bool {
