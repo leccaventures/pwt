@@ -45,11 +45,100 @@ type NodeStatus struct {
 	LastCheck   time.Time
 }
 
+const (
+	scoreWindowSize    = 20   // sliding window: track last N proof fetch results
+	scoreSuccessWeight = 0.7  // 70% of score from success rate
+	scoreLatencyWeight = 0.3  // 30% of score from latency
+	scoreLatencyCap    = 5000 // latency cap in ms (anything above = 0 latency score)
+)
+
+type proofResult struct {
+	success bool
+	latency time.Duration
+}
+
+type NodeScore struct {
+	results []proofResult
+	head    int // next write position (circular buffer)
+	count   int // number of results recorded (max scoreWindowSize)
+}
+
+func (s *NodeScore) RecordSuccess(latency time.Duration) {
+	s.record(proofResult{success: true, latency: latency})
+}
+
+func (s *NodeScore) RecordFailure() {
+	s.record(proofResult{success: false})
+}
+
+func (s *NodeScore) record(r proofResult) {
+	if s.results == nil {
+		s.results = make([]proofResult, scoreWindowSize)
+	}
+	s.results[s.head] = r
+	s.head = (s.head + 1) % scoreWindowSize
+	if s.count < scoreWindowSize {
+		s.count++
+	}
+}
+
+// GetScore returns a composite score in [0, 1]. Higher is better.
+// New nodes with no history return 0.5 (neutral).
+func (s *NodeScore) GetScore() float64 {
+	if s.count == 0 {
+		return 0.5 // neutral score for unknown nodes
+	}
+
+	var successes int
+	var totalLatencyMs float64
+	for i := 0; i < s.count; i++ {
+		idx := (s.head - s.count + i + scoreWindowSize) % scoreWindowSize
+		r := s.results[idx]
+		if r.success {
+			successes++
+			ms := float64(r.latency.Milliseconds())
+			if ms > scoreLatencyCap {
+				ms = scoreLatencyCap
+			}
+			totalLatencyMs += ms
+		}
+	}
+
+	successRate := float64(successes) / float64(s.count)
+
+	latencyScore := 0.0
+	if successes > 0 {
+		avgLatencyMs := totalLatencyMs / float64(successes)
+		// Invert: lower latency = higher score. 0ms → 1.0, scoreLatencyCap ms → 0.0
+		latencyScore = 1.0 - (avgLatencyMs / scoreLatencyCap)
+		if latencyScore < 0 {
+			latencyScore = 0
+		}
+	}
+
+	return successRate*scoreSuccessWeight + latencyScore*scoreLatencyWeight
+}
+
+func (s *NodeScore) GetSuccessRate() float64 {
+	if s.count == 0 {
+		return 0
+	}
+	var successes int
+	for i := 0; i < s.count; i++ {
+		idx := (s.head - s.count + i + scoreWindowSize) % scoreWindowSize
+		if s.results[idx].success {
+			successes++
+		}
+	}
+	return float64(successes) / float64(s.count)
+}
+
 type Node struct {
 	Config config.NodeConfig
 	RPC    *ethclient.Client
 	RawRPC *rpc.Client
 	Status NodeStatus
+	Score  NodeScore
 	mu     sync.RWMutex
 }
 
@@ -237,4 +326,22 @@ func (n *Node) UpdateHeight(height uint64) {
 		n.Status.BlockHeight = height
 		n.Status.LastCheck = time.Now()
 	}
+}
+
+func (n *Node) RecordProofSuccess(latency time.Duration) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.Score.RecordSuccess(latency)
+}
+
+func (n *Node) RecordProofFailure() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.Score.RecordFailure()
+}
+
+func (n *Node) GetProofScore() float64 {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.Score.GetScore()
 }
