@@ -296,9 +296,13 @@ func (p *Processor) updateExporterBlockMetrics(ctx context.Context, node *rpc.No
 }
 
 // fetchBlockProofWithRetry fetches block proof with exponential backoff. First attempt is immediate.
+// Failures are deferred — only recorded once per node when the retry loop ends, preventing
+// retry-induced score poisoning on nodes that eventually succeed.
 func (p *Processor) fetchBlockProofWithRetry(ctx context.Context, node *rpc.Node, height uint64) (BlockProofResponse, error) {
 	var lastErr error
 	totalAttempts := proofFetchMaxRetries + 1
+	failedNodes := make(map[*rpc.Node]struct{})
+
 	for attempt := 0; attempt < totalAttempts; attempt++ {
 		if attempt > 0 {
 			time.Sleep(proofRetryDelay(attempt - 1))
@@ -315,12 +319,16 @@ func (p *Processor) fetchBlockProofWithRetry(ctx context.Context, node *rpc.Node
 			return BlockProofResponse{}, fmt.Errorf("no healthy proof node available")
 		}
 
-		candidate := candidates[0]
+		candidate := candidates[attempt%len(candidates)]
 		var proof BlockProofResponse
 		fetchStart := time.Now()
 		err := candidate.RawRPC.CallContext(ctx, &proof, "debug_getBlockProof", fmt.Sprintf("0x%x", height))
 		if err == nil {
 			candidate.RecordProofSuccess(time.Since(fetchStart))
+			delete(failedNodes, candidate)
+			for fn := range failedNodes {
+				fn.RecordProofFailure()
+			}
 			if p.broadcaster != nil {
 				if attempt == 0 {
 					logger.Info("PROC", "Block #%d | Proof Fetched via %s", height, candidate.Config.Label)
@@ -331,11 +339,15 @@ func (p *Processor) fetchBlockProofWithRetry(ctx context.Context, node *rpc.Node
 			return proof, nil
 		}
 
-		candidate.RecordProofFailure()
+		failedNodes[candidate] = struct{}{}
 		lastErr = err
 		if ctx.Err() != nil {
 			return BlockProofResponse{}, ctx.Err()
 		}
+	}
+
+	for fn := range failedNodes {
+		fn.RecordProofFailure()
 	}
 	return BlockProofResponse{}, lastErr
 }

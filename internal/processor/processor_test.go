@@ -145,6 +145,69 @@ func TestFetchBlockProofWithRetry_FallsBackToHealthyNode(t *testing.T) {
 	}
 }
 
+func TestFetchBlockProofWithRetry_DeferredScoreRecording(t *testing.T) {
+	badServer := newJSONRPCServer(t, func(w http.ResponseWriter, req jsonRPCRequest) {
+		writeJSONRPC(w, jsonRPCResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Error:   &jsonRPCError{Code: -32000, Message: "proof unavailable"},
+		})
+	})
+	defer badServer.Close()
+
+	goodServer := newJSONRPCServer(t, func(w http.ResponseWriter, req jsonRPCRequest) {
+		writeJSONRPC(w, jsonRPCResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result: BlockProofResponse{
+				BlockNumber:            "0x64",
+				BlockProofHash:         "0xabc",
+				BlsAggregatedSignature: "0xsig",
+				SignedBlsKeys:          []string{"0x01"},
+			},
+		})
+	})
+	defer goodServer.Close()
+
+	badClient, err := gethrpc.Dial(badServer.URL)
+	if err != nil {
+		t.Fatalf("dial bad server: %v", err)
+	}
+	defer badClient.Close()
+
+	goodClient, err := gethrpc.Dial(goodServer.URL)
+	if err != nil {
+		t.Fatalf("dial good server: %v", err)
+	}
+	defer goodClient.Close()
+
+	mgr := watchrpc.NewManager([]config.NodeConfig{
+		{Label: "bad", RPC: badServer.URL},
+		{Label: "good", RPC: goodServer.URL},
+	})
+	nodes := mgr.GetNodes()
+	nodes[0].RawRPC = badClient
+	nodes[0].Status = watchrpc.NodeStatus{Healthy: true, BlockHeight: 100}
+	nodes[1].RawRPC = goodClient
+	nodes[1].Status = watchrpc.NodeStatus{Healthy: true, BlockHeight: 100}
+
+	p := NewProcessor(config.ChainConfig{}, config.AdvancedConfig{}, mgr, nil, nil, nil, nil)
+	_, err = p.fetchBlockProofWithRetry(context.Background(), nodes[0], 100)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	badScore := nodes[0].GetProofScore()
+	goodScore := nodes[1].GetProofScore()
+
+	if badScore >= goodScore {
+		t.Fatalf("bad node score (%f) should be lower than good node score (%f)", badScore, goodScore)
+	}
+	if goodScore <= 0.5 {
+		t.Fatalf("good node score (%f) should be above neutral (0.5)", goodScore)
+	}
+}
+
 func newJSONRPCServer(t *testing.T, handler func(http.ResponseWriter, jsonRPCRequest)) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
