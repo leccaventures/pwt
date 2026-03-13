@@ -74,8 +74,9 @@ func (p *Processor) selectProofNode(height uint64) *rpc.Node {
 	}
 
 	type candidate struct {
-		node  *rpc.Node
-		score float64
+		node        *rpc.Node
+		successRate float64
+		score       float64
 	}
 
 	var atHeight []candidate
@@ -87,15 +88,19 @@ func (p *Processor) selectProofNode(height uint64) *rpc.Node {
 			continue
 		}
 		score := n.GetProofScore()
+		successRate := n.GetProofSuccessRate()
 		if status.BlockHeight >= height && height > 0 {
-			atHeight = append(atHeight, candidate{node: n, score: score})
+			atHeight = append(atHeight, candidate{node: n, successRate: successRate, score: score})
 		} else {
-			healthy = append(healthy, candidate{node: n, score: score})
+			healthy = append(healthy, candidate{node: n, successRate: successRate, score: score})
 		}
 	}
 
 	sortByScore := func(c []candidate) {
 		sort.Slice(c, func(i, j int) bool {
+			if c[i].successRate != c[j].successRate {
+				return c[i].successRate > c[j].successRate
+			}
 			return c[i].score > c[j].score
 		})
 	}
@@ -234,9 +239,10 @@ func (p *Processor) proofNodeCandidates(height uint64, primary *rpc.Node) []*rpc
 	}
 
 	type scored struct {
-		node     *rpc.Node
-		score    float64
-		atHeight bool
+		node        *rpc.Node
+		successRate float64
+		score       float64
+		atHeight    bool
 	}
 
 	seen := make(map[*rpc.Node]struct{}, len(nodes))
@@ -255,9 +261,10 @@ func (p *Processor) proofNodeCandidates(height uint64, primary *rpc.Node) []*rpc
 		}
 		seen[node] = struct{}{}
 		candidates = append(candidates, scored{
-			node:     node,
-			score:    node.GetProofScore(),
-			atHeight: status.BlockHeight >= height && height > 0,
+			node:        node,
+			successRate: node.GetProofSuccessRate(),
+			score:       node.GetProofScore(),
+			atHeight:    status.BlockHeight >= height && height > 0,
 		})
 	}
 
@@ -269,6 +276,9 @@ func (p *Processor) proofNodeCandidates(height uint64, primary *rpc.Node) []*rpc
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].atHeight != candidates[j].atHeight {
 			return candidates[i].atHeight
+		}
+		if candidates[i].successRate != candidates[j].successRate {
+			return candidates[i].successRate > candidates[j].successRate
 		}
 		return candidates[i].score > candidates[j].score
 	})

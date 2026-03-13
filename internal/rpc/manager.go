@@ -121,7 +121,7 @@ func (s *NodeScore) GetScore() float64 {
 
 func (s *NodeScore) GetSuccessRate() float64 {
 	if s.count == 0 {
-		return 0
+		return 0.5
 	}
 	var successes int
 	for i := 0; i < s.count; i++ {
@@ -344,4 +344,10 @@ func (n *Node) GetProofScore() float64 {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	return n.Score.GetScore()
+}
+
+func (n *Node) GetProofSuccessRate() float64 {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.Score.GetSuccessRate()
 }
