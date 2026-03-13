@@ -76,6 +76,49 @@ func TestProofNodeCandidates_PrioritizesHealthyFallbacks(t *testing.T) {
 	}
 }
 
+func TestProofNodeCandidates_PrioritizesSuccessRateBeforeLatency(t *testing.T) {
+	mgr := watchrpc.NewManager([]config.NodeConfig{
+		{Label: "fast-less-reliable"},
+		{Label: "slow-more-reliable"},
+	})
+
+	nodes := mgr.GetNodes()
+	for _, node := range nodes {
+		node.RawRPC = &gethrpc.Client{}
+		node.Status = watchrpc.NodeStatus{Healthy: true, BlockHeight: 120}
+	}
+
+	for i := 0; i < 5; i++ {
+		nodes[0].RecordProofSuccess(1 * time.Millisecond)
+		nodes[0].RecordProofFailure()
+	}
+	for i := 0; i < 6; i++ {
+		nodes[1].RecordProofSuccess(4 * time.Second)
+	}
+	for i := 0; i < 4; i++ {
+		nodes[1].RecordProofFailure()
+	}
+
+	p := NewProcessor(config.ChainConfig{}, config.AdvancedConfig{}, mgr, nil, nil, nil, nil)
+	candidates := p.proofNodeCandidates(100, nodes[0])
+
+	if len(candidates) != 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(candidates))
+	}
+
+	if candidates[0].Config.Label != "slow-more-reliable" {
+		t.Fatalf("expected success rate to win over latency, got %s first", candidates[0].Config.Label)
+	}
+
+	selected := p.selectProofNode(100)
+	if selected == nil {
+		t.Fatal("expected a selected proof node")
+	}
+	if selected.Config.Label != "slow-more-reliable" {
+		t.Fatalf("expected selectProofNode to prefer higher success rate, got %s", selected.Config.Label)
+	}
+}
+
 func TestFetchBlockProofWithRetry_FallsBackToHealthyNode(t *testing.T) {
 	var badCalls atomic.Int32
 	badServer := newJSONRPCServer(t, func(w http.ResponseWriter, req jsonRPCRequest) {
